@@ -115,12 +115,13 @@ export const Canvas: React.FC<CanvasProps> = ({
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
-    const width = canvas.width;
-    const height = canvas.height;
+    const dpr = window.devicePixelRatio || 1;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
 
-    // Reset transform
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, width, height);
+    const cssWidth = canvas.width / dpr;
+    const cssHeight = canvas.height / dpr;
+
+    ctx.clearRect(0, 0, cssWidth, cssHeight);
 
     // Draw background color
     if (background === 'dark-grid') {
@@ -128,7 +129,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     } else {
       ctx.fillStyle = '#FFFFFF';
     }
-    ctx.fillRect(0, 0, width, height);
+    ctx.fillRect(0, 0, cssWidth, cssHeight);
 
     // Apply Pan & Zoom transformation
     ctx.save();
@@ -143,8 +144,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Visible world bounds
     const startX = -panOffset.x / zoom;
     const startY = -panOffset.y / zoom;
-    const endX = (width - panOffset.x) / zoom;
-    const endY = (height - panOffset.y) / zoom;
+    const endX = (cssWidth - panOffset.x) / zoom;
+    const endY = (cssHeight - panOffset.y) / zoom;
 
     if (background === 'grid' || background === 'dark-grid') {
       const gridSize = 25; // 25px math square
@@ -535,15 +536,11 @@ export const Canvas: React.FC<CanvasProps> = ({
       const dpr = window.devicePixelRatio || 1;
       const rect = containerRef.current.getBoundingClientRect();
       const canvas = canvasRef.current;
-      canvas.width = rect.width * dpr;
-      canvas.height = rect.height * dpr;
+      canvas.width = Math.round(rect.width * dpr);
+      canvas.height = Math.round(rect.height * dpr);
       canvas.style.width = `${rect.width}px`;
       canvas.style.height = `${rect.height}px`;
 
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.scale(dpr, dpr);
-      }
       render();
     };
 
@@ -607,8 +604,8 @@ export const Canvas: React.FC<CanvasProps> = ({
   const handlePointerDown = (e: React.PointerEvent) => {
     const worldPoint = screenToWorld(e.clientX, e.clientY);
 
-    // Pan with middle click or with Pan tool
-    if (e.button === 1 || tool === 'pan') {
+    // Pan with Right Mouse Button (button === 2), middle click (button === 1), or with Pan tool
+    if (e.button === 2 || e.button === 1 || tool === 'pan') {
       setIsPanning(true);
       setPanStart({ x: e.clientX - panOffset.x, y: e.clientY - panOffset.y });
       return;
@@ -694,7 +691,7 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Broadcast cursor movement for real-time multiplayer cursors
     getSocket().emit('cursor:move', { x: worldPoint.x, y: worldPoint.y, pageIndex });
 
-    if (isPanning) {
+    if (isPanning || (e.buttons & 2) === 2) {
       setPanOffset({
         x: e.clientX - panStart.x,
         y: e.clientY - panStart.y,
@@ -759,8 +756,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     }
   };
 
-  const handlePointerUp = () => {
-    if (isPanning) {
+  const handlePointerUp = (e?: React.PointerEvent) => {
+    if (isPanning || (e && e.button === 2)) {
       setIsPanning(false);
       return;
     }
@@ -932,6 +929,7 @@ export const Canvas: React.FC<CanvasProps> = ({
       ref={containerRef}
       id="tutorboard-canvas-container"
       className="relative w-full h-full overflow-hidden select-none bg-slate-100 touch-none cursor-crosshair"
+      onContextMenu={(e) => e.preventDefault()}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

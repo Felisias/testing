@@ -553,8 +553,8 @@ export default function App() {
             onMathInserted={() => setActiveMathInsert(undefined)}
           />
 
-          {/* Floating Top Toolbar (Drawing, Shapes, Colors, Pages, Undo/Redo) */}
-          <div className="absolute top-3 left-1/2 -translate-x-1/2 z-30 max-w-[95%]">
+          {/* Vertical Toolbar Docked at Left Border */}
+          <div className="absolute top-4 left-3 z-40">
             <Toolbar
               tool={tool}
               setTool={setTool}
@@ -579,11 +579,28 @@ export default function App() {
               onRedo={handleRedo}
               onImageUploaded={handleImageUploaded}
               onExport={handleExportPNG}
+              onToggleMath={() => setIsMathOpen(!isMathOpen)}
+              isMathOpen={isMathOpen}
             />
           </div>
 
+          {/* Floating Math Symbols Drawer at Left (opens next to toolbar) */}
+          {isMathOpen && (
+            <div className="absolute top-4 left-16 z-40">
+              <MathToolbar
+                isOpen={isMathOpen}
+                onToggle={() => setIsMathOpen(!isMathOpen)}
+                onInsertSymbol={(sym) => {
+                  setActiveMathInsert(sym);
+                  setTool('text');
+                  showToast(`Символ ${sym} готов к вставке в текст`);
+                }}
+              />
+            </div>
+          )}
+
           {/* Floating Bottom Voice Controls Bar */}
-          <div className="absolute bottom-3 left-4 z-30 max-w-[calc(100%-140px)]">
+          <div className="absolute bottom-4 left-16 z-30 max-w-[calc(100%-160px)]">
             <VoiceControls
               participants={participants}
               currentUserId={myUserId}
@@ -592,22 +609,9 @@ export default function App() {
             />
           </div>
 
-          {/* Floating Math Symbols Quick Button & Drawer at Left */}
-          <div className="absolute top-20 left-4 z-30">
-            <MathToolbar
-              isOpen={isMathOpen}
-              onToggle={() => setIsMathOpen(!isMathOpen)}
-              onInsertSymbol={(sym) => {
-                setActiveMathInsert(sym);
-                setTool('text');
-                showToast(`Символ ${sym} готов к вставке в текст`);
-              }}
-            />
-          </div>
-
           {/* Toast Notifications */}
           {notificationToast && (
-            <div className="absolute top-20 right-4 z-50 bg-slate-900/90 backdrop-blur text-white px-4 py-2.5 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-top-4 border border-slate-700">
+            <div className="absolute top-4 right-4 z-50 bg-slate-900/90 backdrop-blur text-white px-4 py-2.5 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-top-4 border border-slate-700">
               <span>{notificationToast}</span>
             </div>
           )}

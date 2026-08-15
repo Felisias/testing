@@ -18,8 +18,7 @@ import {
   Users,
   MessageSquare,
   LogOut,
-  QrCode,
-  Sparkles,
+  ChevronDown,
 } from 'lucide-react';
 
 interface RoomHeaderProps {
@@ -53,11 +52,27 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
 
-  // Lesson Timer state
+  // Lesson Timer state (synchronized via server sockets)
   const [timerSeconds, setTimerSeconds] = useState(45 * 60); // 45 min default
   const [isTimerRunning, setIsTimerRunning] = useState(false);
   const [showTimerMenu, setShowTimerMenu] = useState(false);
 
+  // Listen for real-time timer sync from tutor/server
+  useEffect(() => {
+    const socket = getSocket();
+    const handleTimerSync = (data: { seconds: number; isRunning: boolean }) => {
+      setTimerSeconds(data.seconds);
+      setIsTimerRunning(data.isRunning);
+    };
+
+    socket.on('timer:synced', handleTimerSync);
+
+    return () => {
+      socket.off('timer:synced', handleTimerSync);
+    };
+  }, []);
+
+  // Local tick fallback / countdown
   useEffect(() => {
     let interval: any = null;
     if (isTimerRunning && timerSeconds > 0) {
@@ -66,8 +81,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
       }, 1000);
     } else if (timerSeconds === 0 && isTimerRunning) {
       setIsTimerRunning(false);
-      // Play a gentle alert beep or confetti
-      confetti({ particleCount: 50, spread: 60 });
+      confetti({ particleCount: 60, spread: 70 });
     }
     return () => clearInterval(interval);
   }, [isTimerRunning, timerSeconds]);
@@ -90,13 +104,11 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   };
 
   const handleCheerStudent = () => {
-    // Local confetti
     confetti({
       particleCount: 100,
       spread: 70,
       origin: { y: 0.6 },
     });
-    // Broadcast praise to room
     getSocket().emit('tutor:cheer', {
       message: 'Прекрасно решено! Отличная работа!',
     });
@@ -106,6 +118,32 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
     getSocket().emit('tutor:attention', {
       text: 'Внимание на доску! Пожалуйста, посмотрите на решение.',
     });
+  };
+
+  // Timer controls (Tutor broadcasts to all students)
+  const handleToggleTimer = () => {
+    const socket = getSocket();
+    if (isTimerRunning) {
+      setIsTimerRunning(false);
+      socket.emit('timer:pause');
+    } else {
+      setIsTimerRunning(true);
+      socket.emit('timer:start');
+    }
+  };
+
+  const handleSetTimerDuration = (seconds: number) => {
+    setTimerSeconds(seconds);
+    setIsTimerRunning(false);
+    setShowTimerMenu(false);
+    getSocket().emit('timer:set', { seconds });
+  };
+
+  const handleResetTimer = () => {
+    setTimerSeconds(45 * 60);
+    setIsTimerRunning(false);
+    setShowTimerMenu(false);
+    getSocket().emit('timer:reset');
   };
 
   const formatTime = (totalSec: number) => {
@@ -119,7 +157,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   return (
     <header
       id="tutorboard-header"
-      className="bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 py-2 flex flex-wrap items-center justify-between gap-3 select-none"
+      className="relative z-50 bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 py-2 flex flex-wrap items-center justify-between gap-3 select-none shadow-xs"
     >
       {/* Left: Branding, Subject & Room Code */}
       <div className="flex items-center gap-3">
@@ -137,13 +175,13 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
               </span>
             </div>
             <p className="text-[11px] text-slate-600">
-              Вы вошли как: <span className="font-semibold text-slate-700">{userName}</span> ({userRole === 'tutor' ? '👨‍🏫 Репетитор' : '👨‍🎓 Ученик'})
+              Вы вошли как: <span className="font-semibold text-slate-800">{userName}</span> ({userRole === 'tutor' ? '👨‍🏫 Преподаватель' : '👨‍🎓 Ученик'})
             </p>
           </div>
         </div>
 
         {/* Room Code Badge with 1-click copy */}
-        <div className="flex items-center gap-1 bg-slate-100/90 hover:bg-slate-200/90 border border-slate-300/80 rounded-xl px-2.5 py-1 transition">
+        <div className="flex items-center gap-1 bg-slate-100 hover:bg-slate-200/90 border border-slate-300 rounded-xl px-2.5 py-1 transition">
           <span className="text-[11px] text-slate-600 font-medium">Код:</span>
           <span className="font-mono text-xs font-bold text-slate-900 tracking-wider">
             {roomId}
@@ -165,82 +203,89 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
         </div>
       </div>
 
-      {/* Middle: Lesson Timer */}
-      <div className="flex items-center gap-1.5 bg-slate-100 px-2.5 py-1 rounded-xl border border-slate-200">
-        <Clock className="w-4 h-4 text-blue-600" />
+      {/* Middle: Synchronized Lesson Timer */}
+      <div className="flex items-center gap-1.5 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
+        <Clock className={`w-4 h-4 ${isTimerRunning ? 'text-blue-600 animate-pulse' : 'text-slate-500'}`} />
         <span className="font-mono text-xs font-bold text-slate-800 w-12 text-center">
           {formatTime(timerSeconds)}
         </span>
 
-        {/* Play/Pause */}
-        <button
-          onClick={() => setIsTimerRunning(!isTimerRunning)}
-          title={isTimerRunning ? 'Пауза' : 'Запустить таймер урока'}
-          className="p-1 hover:bg-white rounded text-slate-700 transition"
-        >
-          {isTimerRunning ? <Pause className="w-3.5 h-3.5 text-amber-600" /> : <Play className="w-3.5 h-3.5 text-emerald-600" />}
-        </button>
-
-        {/* Presets menu */}
-        <div className="relative">
-          <button
-            onClick={() => setShowTimerMenu(!showTimerMenu)}
-            title="Настройки времени урока"
-            className="p-1 hover:bg-white rounded text-slate-500 transition text-[11px]"
-          >
-            ⚙️
-          </button>
-          {showTimerMenu && (
-            <div
-              className="absolute right-0 top-full mt-2 w-48 bg-white rounded-xl shadow-xl border border-slate-200 p-1.5 z-50 animate-in fade-in"
-              onMouseLeave={() => setShowTimerMenu(false)}
+        {/* Tutor: Play/Pause controls with sync */}
+        {userRole === 'tutor' ? (
+          <>
+            <button
+              onClick={handleToggleTimer}
+              title={isTimerRunning ? 'Приостановить таймер урока' : 'Запустить таймер урока для всех'}
+              className="p-1 hover:bg-white rounded-lg text-slate-700 transition"
             >
-              <div className="text-[10px] font-bold text-slate-600 px-2 py-1 uppercase">Длительность урока</div>
-              {[
-                { label: '30 минут', sec: 30 * 60 },
-                { label: '45 минут (школьный)', sec: 45 * 60 },
-                { label: '60 минут (1 час)', sec: 60 * 60 },
-                { label: '90 минут (1.5 часа)', sec: 90 * 60 },
-              ].map((item) => (
-                <button
-                  key={item.sec}
-                  onClick={() => {
-                    setTimerSeconds(item.sec);
-                    setIsTimerRunning(false);
-                    setShowTimerMenu(false);
-                  }}
-                  className="w-full text-left px-2 py-1.5 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 rounded-lg font-medium transition"
-                >
-                  {item.label}
-                </button>
-              ))}
-              <div className="border-t border-slate-100 my-1" />
+              {isTimerRunning ? (
+                <Pause className="w-3.5 h-3.5 text-amber-600" />
+              ) : (
+                <Play className="w-3.5 h-3.5 text-emerald-600" />
+              )}
+            </button>
+
+            {/* Presets menu */}
+            <div className="relative">
               <button
-                onClick={() => {
-                  setTimerSeconds(45 * 60);
-                  setIsTimerRunning(false);
-                  setShowTimerMenu(false);
-                }}
-                className="w-full text-left px-2 py-1 text-xs text-rose-600 hover:bg-rose-50 rounded-lg transition flex items-center gap-1"
+                onClick={() => setShowTimerMenu(!showTimerMenu)}
+                title="Настройки времени урока"
+                className="p-1 hover:bg-white rounded-lg text-slate-500 hover:text-slate-900 transition text-[11px] flex items-center"
               >
-                <RotateCcw className="w-3 h-3" /> Сбросить
+                <ChevronDown className="w-3 h-3" />
               </button>
+
+              {showTimerMenu && (
+                <div
+                  className="absolute right-0 top-full mt-2 w-52 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2 z-[100] animate-in fade-in"
+                  onMouseLeave={() => setShowTimerMenu(false)}
+                >
+                  <div className="text-[10px] font-bold text-slate-500 px-2 py-1 uppercase tracking-wider">
+                    Длительность урока
+                  </div>
+                  {[
+                    { label: '30 минут', sec: 30 * 60 },
+                    { label: '45 минут (стандарт)', sec: 45 * 60 },
+                    { label: '60 минут (1 час)', sec: 60 * 60 },
+                    { label: '90 минут (1.5 часа)', sec: 90 * 60 },
+                  ].map((item) => (
+                    <button
+                      key={item.sec}
+                      onClick={() => handleSetTimerDuration(item.sec)}
+                      className="w-full text-left px-2.5 py-1.5 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 rounded-xl font-medium transition"
+                    >
+                      {item.label}
+                    </button>
+                  ))}
+                  <div className="border-t border-slate-100 my-1" />
+                  <button
+                    onClick={handleResetTimer}
+                    className="w-full text-left px-2.5 py-1.5 text-xs text-rose-600 hover:bg-rose-50 rounded-xl transition flex items-center gap-1.5 font-medium"
+                  >
+                    <RotateCcw className="w-3.5 h-3.5" /> Сбросить таймер
+                  </button>
+                </div>
+              )}
             </div>
-          )}
-        </div>
+          </>
+        ) : (
+          <span className="text-[10px] font-medium text-slate-500 pl-1">
+            {isTimerRunning ? 'Урок идет' : 'Пауза'}
+          </span>
+        )}
       </div>
 
       {/* Right: Tutor Special Tools & Navigation Actions */}
       <div className="flex items-center gap-2">
         {/* Tutor Only Superpowers */}
         {userRole === 'tutor' && (
-          <div className="flex items-center gap-1 bg-amber-50/80 p-1 rounded-xl border border-amber-200">
+          <div className="flex items-center gap-1 bg-amber-50 p-1 rounded-xl border border-amber-200">
             {/* Lock/Unlock drawing */}
             <button
               onClick={handleToggleLock}
               title={isLocked ? 'Разблокировать доску для учеников' : 'Заблокировать доску (Только преподаватель)'}
               className={`p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition ${
-                isLocked ? 'bg-amber-500 text-white shadow-xs' : 'text-amber-800 hover:bg-amber-100'
+                isLocked ? 'bg-amber-500 text-white shadow-xs' : 'text-amber-900 hover:bg-amber-100'
               }`}
             >
               {isLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5" />}
@@ -260,7 +305,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
             {/* Attention Ping */}
             <button
               onClick={handleAttentionPing}
-              title="Привлечь внимание к доске"
+              title="Привлечь внимание ученика к доске"
               className="p-1.5 rounded-lg text-xs font-semibold text-amber-900 hover:bg-amber-200/70 transition flex items-center gap-1"
             >
               <Bell className="w-3.5 h-3.5 text-amber-600" />
@@ -304,11 +349,11 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
 
       {/* Share Modal Dialog */}
       {showShareModal && (
-        <div className="fixed inset-0 bg-slate-900/50 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 p-6 max-w-md w-full animate-in zoom-in-95">
+        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[100] animate-in fade-in">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 max-w-md w-full animate-in zoom-in-95">
             <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-2">
-                <div className="p-2 bg-blue-50 text-blue-600 rounded-xl">
+              <div className="flex items-center gap-2.5">
+                <div className="p-2.5 bg-blue-50 text-blue-600 rounded-2xl">
                   <Share2 className="w-5 h-5" />
                 </div>
                 <div>
@@ -318,7 +363,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
               </div>
               <button
                 onClick={() => setShowShareModal(false)}
-                className="text-slate-400 hover:text-slate-700 text-sm font-semibold p-1"
+                className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-900 flex items-center justify-center transition"
               >
                 ✕
               </button>
@@ -327,14 +372,14 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
             <div className="space-y-4">
               {/* Code Box */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Код комнаты:</label>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Код комнаты:</label>
                 <div className="flex items-center gap-2">
-                  <div className="flex-1 bg-slate-100 border border-slate-300 rounded-xl px-4 py-2.5 font-mono text-lg font-bold text-blue-700 tracking-wider text-center">
+                  <div className="flex-1 bg-slate-100 border border-slate-300 rounded-2xl px-4 py-2.5 font-mono text-lg font-bold text-blue-700 tracking-wider text-center select-all">
                     {roomId}
                   </div>
                   <button
                     onClick={copyRoomCode}
-                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-semibold text-xs transition flex items-center gap-1.5 shadow-sm"
+                    className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-xs transition flex items-center gap-1.5 shadow-md shadow-blue-600/30"
                   >
                     {copiedCode ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
                     {copiedCode ? 'Скопировано' : 'Копировать'}
@@ -344,17 +389,17 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
 
               {/* Direct Link Box */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Прямая ссылка для входа:</label>
+                <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">Прямая ссылка для входа:</label>
                 <div className="flex items-center gap-2">
                   <input
                     type="text"
                     readOnly
                     value={`${window.location.origin}?room=${roomId}`}
-                    className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-700 select-all"
+                    className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-700 select-all font-mono"
                   />
                   <button
                     onClick={copyDirectLink}
-                    className="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl font-semibold text-xs transition flex items-center gap-1"
+                    className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl font-bold text-xs transition flex items-center gap-1 shadow-sm"
                   >
                     {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
                     Ссылка
@@ -363,16 +408,16 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
               </div>
 
               {/* Step by Step Tip */}
-              <div className="bg-slate-50 rounded-xl p-3 text-xs text-slate-600 space-y-1 border border-slate-200">
-                <p className="font-semibold text-slate-800">Как ученику подключиться:</p>
-                <p>1. Открыть сайт и нажать "Войти по коду".</p>
-                <p>2. Ввести код <strong className="text-blue-600 font-mono">{roomId}</strong> и свое имя.</p>
-                <p>3. Включить микрофон и начать интерактивный урок!</p>
+              <div className="bg-slate-50 rounded-2xl p-3.5 text-xs text-slate-600 space-y-1 border border-slate-200">
+                <p className="font-bold text-slate-800">Как ученику подключиться:</p>
+                <p>1. Открыть ссылку или сайт и войти в свой аккаунт ученика.</p>
+                <p>2. Ввести код <strong className="text-blue-600 font-mono font-bold">{roomId}</strong>.</p>
+                <p>3. Включить микрофон и рисовать вместе на доске!</p>
               </div>
 
               <button
                 onClick={() => setShowShareModal(false)}
-                className="w-full py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold rounded-xl text-xs transition"
+                className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-2xl text-xs transition"
               >
                 Закрыть
               </button>

@@ -1,7 +1,25 @@
 export type UserRole = 'tutor' | 'student';
 
+export interface UserAccount {
+  id: string;
+  username: string;
+  name: string;
+  role: UserRole;
+  createdAt: number;
+}
+
+export interface SavedBoard {
+  id: string; // roomId
+  title: string;
+  subject: string;
+  role: UserRole;
+  lastVisited: number;
+  totalPages?: number;
+}
+
 export interface Participant {
   id: string; // socket.id
+  userId?: string;
   name: string;
   role: UserRole;
   color: string;

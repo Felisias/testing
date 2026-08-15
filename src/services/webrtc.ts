@@ -4,7 +4,6 @@ interface PeerConnection {
   peerId: string;
   connection: RTCPeerConnection;
   audioElement?: HTMLAudioElement;
-  analyser?: AnalyserNode;
 }
 
 export class VoiceManager {
@@ -19,17 +18,60 @@ export class VoiceManager {
   private onSpeakingChangeCallback: ((isSpeaking: boolean) => void) | null = null;
   private isSpeaking: boolean = false;
   private speakingThreshold: number = 15; // 0-100 scale
+  private audioContainer: HTMLElement | null = null;
 
   private rtcConfig: RTCConfiguration = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
       { urls: 'stun:stun1.l.google.com:19302' },
       { urls: 'stun:stun2.l.google.com:19302' },
+      { urls: 'stun:stun3.l.google.com:19302' },
+      { urls: 'stun:stun4.l.google.com:19302' },
+      { urls: 'stun:stun.cloudflare.com:3478' },
+      { urls: 'stun:stun.services.mozilla.com:3478' },
     ],
   };
 
   constructor() {
     this.setupSocketListeners();
+    this.setupUserGestureUnlock();
+  }
+
+  private getOrCreateAudioContainer(): HTMLElement {
+    if (this.audioContainer && document.body.contains(this.audioContainer)) {
+      return this.audioContainer;
+    }
+    let container = document.getElementById('webrtc-audio-container');
+    if (!container) {
+      container = document.createElement('div');
+      container.id = 'webrtc-audio-container';
+      container.style.position = 'fixed';
+      container.style.width = '0px';
+      container.style.height = '0px';
+      container.style.opacity = '0';
+      container.style.pointerEvents = 'none';
+      container.style.overflow = 'hidden';
+      document.body.appendChild(container);
+    }
+    this.audioContainer = container;
+    return container;
+  }
+
+  private setupUserGestureUnlock() {
+    const unlock = () => {
+      if (this.audioContext && this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {});
+      }
+      this.peerConnections.forEach((peer) => {
+        if (peer.audioElement && peer.audioElement.paused) {
+          peer.audioElement.play().catch(() => {});
+        }
+      });
+    };
+
+    window.addEventListener('click', unlock, { passive: true });
+    window.addEventListener('keydown', unlock, { passive: true });
+    window.addEventListener('pointerdown', unlock, { passive: true });
   }
 
   private setupSocketListeners() {
@@ -48,18 +90,37 @@ export class VoiceManager {
         try {
           if (type === 'offer') {
             await peer.connection.setRemoteDescription(new RTCSessionDescription(signal));
+
+            // Add local stream tracks if not already added
+            if (this.localStream) {
+              const senders = peer.connection.getSenders();
+              this.localStream.getAudioTracks().forEach((track) => {
+                const alreadyAdded = senders.some((s) => s.track === track);
+                if (!alreadyAdded) {
+                  peer!.connection.addTrack(track, this.localStream!);
+                }
+              });
+            }
+
             const answer = await peer.connection.createAnswer();
             await peer.connection.setLocalDescription(answer);
+
             socket.emit('voice:signal', {
               to: from,
               signal: answer,
               type: 'answer',
             });
           } else if (type === 'answer') {
-            await peer.connection.setRemoteDescription(new RTCSessionDescription(signal));
+            if (peer.connection.signalingState !== 'stable') {
+              await peer.connection.setRemoteDescription(new RTCSessionDescription(signal));
+            }
           } else if (type === 'ice-candidate') {
             if (signal) {
-              await peer.connection.addIceCandidate(new RTCIceCandidate(signal));
+              try {
+                await peer.connection.addIceCandidate(new RTCIceCandidate(signal));
+              } catch (e) {
+                console.warn('Could not add ICE candidate:', e);
+              }
             }
           }
         } catch (err) {
@@ -75,7 +136,9 @@ export class VoiceManager {
 
   public async initLocalAudio(): Promise<boolean> {
     try {
-      if (this.localStream) return true;
+      if (this.localStream && this.localStream.active) {
+        return true;
+      }
 
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
@@ -91,16 +154,47 @@ export class VoiceManager {
       // Audio analysis for speaking indicator
       try {
         const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        this.audioContext = new AudioCtx();
+        if (!this.audioContext || this.audioContext.state === 'closed') {
+          this.audioContext = new AudioCtx();
+        }
+        if (this.audioContext.state === 'suspended') {
+          this.audioContext.resume().catch(() => {});
+        }
+
         const source = this.audioContext.createMediaStreamSource(stream);
         this.localAnalyser = this.audioContext.createAnalyser();
         this.localAnalyser.fftSize = 256;
+        this.localAnalyser.smoothingTimeConstant = 0.4;
         source.connect(this.localAnalyser);
 
         this.startVolumeMonitoring();
       } catch (e) {
         console.warn('AudioContext visualization not supported:', e);
       }
+
+      // Attach local stream tracks to all existing peer connections and renegotiate if needed
+      this.peerConnections.forEach((peer, peerId) => {
+        const senders = peer.connection.getSenders();
+        stream.getAudioTracks().forEach((track) => {
+          const alreadyAdded = senders.some((s) => s.track === track);
+          if (!alreadyAdded) {
+            peer.connection.addTrack(track, stream);
+          }
+        });
+
+        // Trigger renegotiation offer
+        peer.connection
+          .createOffer({ offerToReceiveAudio: true })
+          .then((offer) => peer.connection.setLocalDescription(offer))
+          .then(() => {
+            getSocket().emit('voice:signal', {
+              to: peerId,
+              signal: peer.connection.localDescription,
+              type: 'offer',
+            });
+          })
+          .catch((err) => console.warn('Renegotiation failed for', peerId, err));
+      });
 
       return true;
     } catch (err) {
@@ -110,18 +204,20 @@ export class VoiceManager {
   }
 
   public callPeer(peerId: string) {
-    if (this.peerConnections.has(peerId)) return;
-    const peer = this.createPeerConnection(peerId);
+    let peer = this.peerConnections.get(peerId);
+    if (!peer) {
+      peer = this.createPeerConnection(peerId);
+    }
 
     peer.connection
       .createOffer({
         offerToReceiveAudio: true,
       })
-      .then((offer) => peer.connection.setLocalDescription(offer))
+      .then((offer) => peer!.connection.setLocalDescription(offer))
       .then(() => {
         getSocket().emit('voice:signal', {
           to: peerId,
-          signal: peer.connection.localDescription,
+          signal: peer!.connection.localDescription,
           type: 'offer',
         });
       })
@@ -132,9 +228,16 @@ export class VoiceManager {
     const connection = new RTCPeerConnection(this.rtcConfig);
     const peer: PeerConnection = { peerId, connection };
 
+    // Request bidirectional audio transceiver
+    try {
+      connection.addTransceiver('audio', { direction: 'sendrecv' });
+    } catch (e) {
+      // Fallback for older browsers
+    }
+
     // Add local tracks if available
     if (this.localStream) {
-      this.localStream.getTracks().forEach((track) => {
+      this.localStream.getAudioTracks().forEach((track) => {
         connection.addTrack(track, this.localStream!);
       });
     }
@@ -153,15 +256,30 @@ export class VoiceManager {
     // Remote Audio Stream
     connection.ontrack = (event) => {
       if (event.streams && event.streams[0]) {
+        const stream = event.streams[0];
         let audioEl = peer.audioElement;
+
         if (!audioEl) {
-          audioEl = new Audio();
+          audioEl = document.createElement('audio');
           audioEl.autoplay = true;
           audioEl.muted = this.isDeafened;
+          audioEl.setAttribute('playsinline', 'true');
+          audioEl.setAttribute('data-peer-id', peerId);
+
+          const container = this.getOrCreateAudioContainer();
+          container.appendChild(audioEl);
           peer.audioElement = audioEl;
         }
-        audioEl.srcObject = event.streams[0];
-        audioEl.play().catch((e) => console.log('Audio autoplay prevented:', e));
+
+        audioEl.srcObject = stream;
+        audioEl.volume = 1.0;
+
+        const playPromise = audioEl.play();
+        if (playPromise !== undefined) {
+          playPromise.catch((e) => {
+            console.log('Audio autoplay prevented, awaiting user click:', e);
+          });
+        }
       }
     };
 

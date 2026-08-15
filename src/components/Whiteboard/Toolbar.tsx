@@ -4,7 +4,6 @@ import {
   BackgroundType,
   UserRole,
   ImageElement,
-  WhiteboardElement,
 } from '../../types';
 import { QUICK_PALETTES, STROKE_WIDTHS } from '../../data/mathSymbols';
 import { getSocket } from '../../services/socket';
@@ -23,16 +22,16 @@ import {
   Image as ImageIcon,
   Flame,
   Hand,
-  ChevronDown,
+  ChevronRight,
   Undo2,
   Redo2,
   Trash2,
   Download,
   Plus,
   ChevronLeft,
-  ChevronRight,
   Layers,
-  Sparkles,
+  Palette,
+  Sigma,
 } from 'lucide-react';
 
 interface ToolbarProps {
@@ -59,6 +58,8 @@ interface ToolbarProps {
   onRedo: () => void;
   onImageUploaded: (imgEl: ImageElement) => void;
   onExport: () => void;
+  onToggleMath?: () => void;
+  isMathOpen?: boolean;
 }
 
 export const Toolbar: React.FC<ToolbarProps> = ({
@@ -71,7 +72,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   background,
   setBackground,
   canEdit,
-  userRole,
   userName,
   userColor,
   pageIndex,
@@ -85,19 +85,22 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   onRedo,
   onImageUploaded,
   onExport,
+  onToggleMath,
+  isMathOpen,
 }) => {
   const [showShapeMenu, setShowShapeMenu] = useState(false);
   const [showBgMenu, setShowBgMenu] = useState(false);
   const [showColorMenu, setShowColorMenu] = useState(false);
+  const [showStrokeMenu, setShowStrokeMenu] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const shapeTools: { id: ToolType; label: string; icon: React.ReactNode }[] = [
     { id: 'line', label: 'Прямая линия', icon: <Minus className="w-4 h-4" /> },
     { id: 'arrow', label: 'Стрелка / Вектор', icon: <ArrowRight className="w-4 h-4" /> },
     { id: 'rect', label: 'Прямоугольник', icon: <Square className="w-4 h-4" /> },
-    { id: 'circle', label: 'Окружность / Эллипс', icon: <Circle className="w-4 h-4" /> },
+    { id: 'circle', label: 'Окружность', icon: <Circle className="w-4 h-4" /> },
     { id: 'triangle', label: 'Треугольник', icon: <Triangle className="w-4 h-4" /> },
-    { id: 'coordSystem', label: 'Система координат X-Y', icon: <Grid3X3 className="w-4 h-4" /> },
+    { id: 'coordSystem', label: 'Оси координат X-Y', icon: <Grid3X3 className="w-4 h-4" /> },
   ];
 
   const backgrounds: { id: BackgroundType; label: string; desc: string }[] = [
@@ -117,7 +120,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
       const src = event.target?.result as string;
       const img = new Image();
       img.onload = () => {
-        // Calculate nice dimensions
         let width = img.naturalWidth;
         let height = img.naturalHeight;
         const maxDim = 600;
@@ -132,13 +134,13 @@ export const Toolbar: React.FC<ToolbarProps> = ({
         }
 
         const newImageEl: ImageElement = {
-          id: `img-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          id: `img-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
           userId: 'self',
           userName,
           userColor,
           type: 'image',
-          x: 100,
-          y: 100,
+          x: 120,
+          y: 120,
           width,
           height,
           src,
@@ -158,21 +160,31 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   const isShapeActive = shapeTools.some((s) => s.id === tool);
   const activeShape = shapeTools.find((s) => s.id === tool) || shapeTools[2];
 
+  const closeAllMenus = () => {
+    setShowShapeMenu(false);
+    setShowBgMenu(false);
+    setShowColorMenu(false);
+    setShowStrokeMenu(false);
+  };
+
   return (
     <aside
-      id="tutorboard-toolbar"
+      id="tutorboard-vertical-toolbar"
       aria-label="Панель инструментов доски"
-      className="bg-white/95 backdrop-blur-md shadow-lg border border-slate-200/80 rounded-2xl p-1.5 flex flex-wrap items-center justify-between gap-2 max-w-full"
+      className="bg-white/95 backdrop-blur-md shadow-2xl border border-slate-200/90 rounded-2xl p-1.5 flex flex-col items-center gap-1.5 select-none z-40"
     >
-      {/* Left tool group: Primary tools */}
-      <div className="flex items-center gap-1">
+      {/* 1. Primary Navigation Tools */}
+      <div className="flex flex-col items-center gap-1 w-full">
         {/* Select */}
         <button
-          onClick={() => setTool('select')}
-          title="Выделение и перемещение"
-          className={`p-2 rounded-xl text-slate-700 transition flex items-center justify-center ${
+          onClick={() => {
+            setTool('select');
+            closeAllMenus();
+          }}
+          title="Выделение и перемещение (V)"
+          className={`p-2 rounded-xl transition flex items-center justify-center ${
             tool === 'select'
-              ? 'bg-blue-600 text-white shadow-sm'
+              ? 'bg-blue-600 text-white shadow-md'
               : 'hover:bg-slate-100 text-slate-700'
           }`}
         >
@@ -181,27 +193,36 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         {/* Hand / Pan */}
         <button
-          onClick={() => setTool('pan')}
-          title="Рука (Панорамирование доски)"
-          className={`p-2 rounded-xl text-slate-700 transition flex items-center justify-center ${
+          onClick={() => {
+            setTool('pan');
+            closeAllMenus();
+          }}
+          title="Рука (Панорамирование доски / ПКМ)"
+          className={`p-2 rounded-xl transition flex items-center justify-center ${
             tool === 'pan'
-              ? 'bg-blue-600 text-white shadow-sm'
+              ? 'bg-blue-600 text-white shadow-md'
               : 'hover:bg-slate-100 text-slate-700'
           }`}
         >
           <Hand className="w-4 h-4" />
         </button>
+      </div>
 
-        <div className="h-6 w-px bg-slate-200 mx-0.5" />
+      <div className="w-6 h-px bg-slate-200" />
 
+      {/* 2. Drawing Tools */}
+      <div className="flex flex-col items-center gap-1 w-full">
         {/* Pen */}
         <button
-          onClick={() => setTool('pen')}
-          title="Перо / Ручка (Рисование)"
+          onClick={() => {
+            setTool('pen');
+            closeAllMenus();
+          }}
+          title="Перо / Ручка (P)"
           disabled={!canEdit}
           className={`p-2 rounded-xl transition flex items-center justify-center ${
             tool === 'pen'
-              ? 'bg-blue-600 text-white shadow-sm'
+              ? 'bg-blue-600 text-white shadow-md'
               : 'hover:bg-slate-100 text-slate-700'
           } ${!canEdit ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
@@ -210,12 +231,15 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         {/* Highlighter */}
         <button
-          onClick={() => setTool('highlighter')}
+          onClick={() => {
+            setTool('highlighter');
+            closeAllMenus();
+          }}
           title="Маркер / Текстовыделитель"
           disabled={!canEdit}
           className={`p-2 rounded-xl transition flex items-center justify-center ${
             tool === 'highlighter'
-              ? 'bg-blue-600 text-white shadow-sm'
+              ? 'bg-blue-600 text-white shadow-md'
               : 'hover:bg-slate-100 text-slate-700'
           } ${!canEdit ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
@@ -224,19 +248,22 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         {/* Eraser */}
         <button
-          onClick={() => setTool('eraser')}
-          title="Ластик"
+          onClick={() => {
+            setTool('eraser');
+            closeAllMenus();
+          }}
+          title="Ластик (E)"
           disabled={!canEdit}
           className={`p-2 rounded-xl transition flex items-center justify-center ${
             tool === 'eraser'
-              ? 'bg-blue-600 text-white shadow-sm'
+              ? 'bg-blue-600 text-white shadow-md'
               : 'hover:bg-slate-100 text-slate-700'
           } ${!canEdit ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
           <Eraser className="w-4 h-4" />
         </button>
 
-        {/* Shapes Menu */}
+        {/* Shapes Menu Flyout */}
         <div className="relative">
           <button
             onClick={() => {
@@ -246,56 +273,63 @@ export const Toolbar: React.FC<ToolbarProps> = ({
                 setTool(activeShape.id);
                 setShowShapeMenu(true);
               }
+              setShowBgMenu(false);
+              setShowColorMenu(false);
+              setShowStrokeMenu(false);
             }}
             title="Геометрические фигуры"
             disabled={!canEdit}
-            className={`p-2 rounded-xl transition flex items-center gap-1 ${
+            className={`p-2 rounded-xl transition flex items-center justify-center ${
               isShapeActive
-                ? 'bg-blue-600 text-white shadow-sm'
+                ? 'bg-blue-600 text-white shadow-md'
                 : 'hover:bg-slate-100 text-slate-700'
             } ${!canEdit ? 'opacity-40 cursor-not-allowed' : ''}`}
           >
             {activeShape.icon}
-            <ChevronDown className="w-3 h-3 opacity-70" />
           </button>
 
           {showShapeMenu && canEdit && (
             <div
-              className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-xl border border-slate-200 p-1.5 z-50 animate-in fade-in"
+              className="absolute left-full top-0 ml-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2 z-50 animate-in fade-in slide-in-from-left-2"
               onMouseLeave={() => setShowShapeMenu(false)}
             >
-              <div className="text-[11px] font-semibold text-slate-600 px-2 py-1 uppercase tracking-wider">
+              <div className="text-[11px] font-bold text-slate-600 px-2 py-1 uppercase tracking-wider">
                 Фигуры и Графика
               </div>
-              {shapeTools.map((shape) => (
-                <button
-                  key={shape.id}
-                  onClick={() => {
-                    setTool(shape.id);
-                    setShowShapeMenu(false);
-                  }}
-                  className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-xs font-medium transition ${
-                    tool === shape.id
-                      ? 'bg-blue-50 text-blue-700 font-semibold'
-                      : 'hover:bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  <span className="p-1 rounded bg-slate-100 text-slate-700">{shape.icon}</span>
-                  {shape.label}
-                </button>
-              ))}
+              <div className="space-y-1">
+                {shapeTools.map((shape) => (
+                  <button
+                    key={shape.id}
+                    onClick={() => {
+                      setTool(shape.id);
+                      setShowShapeMenu(false);
+                    }}
+                    className={`w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition ${
+                      tool === shape.id
+                        ? 'bg-blue-50 text-blue-700 font-semibold'
+                        : 'hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <span className="p-1 rounded-lg bg-slate-100 text-slate-700">{shape.icon}</span>
+                    <span>{shape.label}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
 
         {/* Text */}
         <button
-          onClick={() => setTool('text')}
-          title="Текст и формулы"
+          onClick={() => {
+            setTool('text');
+            closeAllMenus();
+          }}
+          title="Текст и формулы (T)"
           disabled={!canEdit}
           className={`p-2 rounded-xl transition flex items-center justify-center ${
             tool === 'text'
-              ? 'bg-blue-600 text-white shadow-sm'
+              ? 'bg-blue-600 text-white shadow-md'
               : 'hover:bg-slate-100 text-slate-700'
           } ${!canEdit ? 'opacity-40 cursor-not-allowed' : ''}`}
         >
@@ -304,8 +338,11 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         {/* Image upload */}
         <button
-          onClick={() => fileInputRef.current?.click()}
-          title="Загрузить изображение (задача, фото, схема)"
+          onClick={() => {
+            closeAllMenus();
+            fileInputRef.current?.click();
+          }}
+          title="Вставить фото / задачу / рисунок"
           disabled={!canEdit}
           className={`p-2 rounded-xl transition flex items-center justify-center hover:bg-slate-100 text-slate-700 ${
             !canEdit ? 'opacity-40 cursor-not-allowed' : ''
@@ -323,188 +360,272 @@ export const Toolbar: React.FC<ToolbarProps> = ({
 
         {/* Laser Pointer */}
         <button
-          onClick={() => setTool('laser')}
-          title="Лазерная указка (для объяснения формул)"
+          onClick={() => {
+            setTool('laser');
+            closeAllMenus();
+          }}
+          title="Лазерная указка (для объяснения)"
           className={`p-2 rounded-xl transition flex items-center justify-center ${
             tool === 'laser'
-              ? 'bg-rose-600 text-white shadow-sm animate-pulse'
+              ? 'bg-rose-600 text-white shadow-md animate-pulse'
               : 'hover:bg-slate-100 text-slate-700'
           }`}
         >
           <Flame className="w-4 h-4 text-rose-500" />
         </button>
+
+        {/* Math Toolbar Toggle */}
+        {onToggleMath && (
+          <button
+            onClick={onToggleMath}
+            title="Математические формулы и символы"
+            className={`p-2 rounded-xl transition flex items-center justify-center ${
+              isMathOpen
+                ? 'bg-indigo-600 text-white shadow-md'
+                : 'hover:bg-slate-100 text-slate-700'
+            }`}
+          >
+            <Sigma className="w-4 h-4" />
+          </button>
+        )}
       </div>
 
-      {/* Middle: Color palette & Stroke width */}
-      <div className="flex items-center gap-2">
-        {/* Colors */}
-        <div className="flex items-center gap-1 bg-slate-50 p-1 rounded-xl border border-slate-200">
-          {QUICK_PALETTES.slice(0, 6).map((c) => (
-            <button
-              key={c.value}
-              onClick={() => setColor(c.value)}
-              title={c.name}
-              className={`w-6 h-6 rounded-full transition-transform ${
-                color === c.value
-                  ? 'ring-2 ring-blue-500 ring-offset-2 scale-110'
-                  : 'hover:scale-105 opacity-85 hover:opacity-100'
-              }`}
-              style={{ backgroundColor: c.value }}
-            />
-          ))}
+      <div className="w-6 h-px bg-slate-200" />
 
-          {/* Color picker */}
-          <input
-            type="color"
-            value={color}
-            onChange={(e) => setColor(e.target.value)}
-            title="Выбрать любой цвет"
-            className="w-6 h-6 rounded-full cursor-pointer border-0 p-0 bg-transparent"
-          />
-        </div>
-
-        {/* Stroke width selector */}
-        <div className="flex items-center gap-1 bg-slate-50 px-2 py-1 rounded-xl border border-slate-200">
-          {STROKE_WIDTHS.map((sw) => (
-            <button
-              key={sw.size}
-              onClick={() => setStrokeWidth(sw.size)}
-              title={`${sw.label} (${sw.size}px)`}
-              className={`p-1.5 rounded-lg flex items-center justify-center transition ${
-                strokeWidth === sw.size
-                  ? 'bg-white shadow-sm text-blue-600'
-                  : 'text-slate-600 hover:text-slate-700'
-              }`}
-            >
-              <div
-                className="rounded-full bg-current"
-                style={{
-                  width: `${Math.max(3, Math.min(14, sw.size / 2 + 2))}px`,
-                  height: `${Math.max(3, Math.min(14, sw.size / 2 + 2))}px`,
-                }}
-              />
-            </button>
-          ))}
-        </div>
-
-        {/* Background Selector */}
+      {/* 3. Color & Stroke Flyouts */}
+      <div className="flex flex-col items-center gap-1.5 w-full">
+        {/* Active Color button & flyout */}
         <div className="relative">
           <button
-            onClick={() => setShowBgMenu(!showBgMenu)}
-            title="Фон доски (Клетка, Линейка, Меловая доска)"
-            className="px-2.5 py-1.5 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1.5 transition"
+            onClick={() => {
+              setShowColorMenu(!showColorMenu);
+              setShowShapeMenu(false);
+              setShowBgMenu(false);
+              setShowStrokeMenu(false);
+            }}
+            title="Палитра цветов"
+            className="w-7 h-7 rounded-full shadow-inner ring-2 ring-slate-300 ring-offset-1 transition hover:scale-105"
+            style={{ backgroundColor: color }}
+          />
+
+          {showColorMenu && (
+            <div
+              className="absolute left-full top-0 ml-2 w-48 bg-white rounded-2xl shadow-2xl border border-slate-200 p-3 z-50 animate-in fade-in slide-in-from-left-2"
+              onMouseLeave={() => setShowColorMenu(false)}
+            >
+              <div className="text-[11px] font-bold text-slate-600 mb-2 uppercase tracking-wider">
+                Цвет маркера
+              </div>
+              <div className="grid grid-cols-4 gap-2">
+                {QUICK_PALETTES.map((c) => (
+                  <button
+                    key={c.value}
+                    onClick={() => {
+                      setColor(c.value);
+                      setShowColorMenu(false);
+                    }}
+                    title={c.name}
+                    className={`w-7 h-7 rounded-full transition-transform ${
+                      color === c.value
+                        ? 'ring-2 ring-blue-500 ring-offset-2 scale-110'
+                        : 'hover:scale-105 opacity-90 hover:opacity-100'
+                    }`}
+                    style={{ backgroundColor: c.value }}
+                  />
+                ))}
+              </div>
+              <div className="mt-3 pt-2 border-t border-slate-100 flex items-center justify-between">
+                <span className="text-xs text-slate-600">Свой цвет:</span>
+                <input
+                  type="color"
+                  value={color}
+                  onChange={(e) => setColor(e.target.value)}
+                  className="w-6 h-6 rounded-full cursor-pointer border-0 p-0 bg-transparent"
+                />
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Stroke Width button & flyout */}
+        <div className="relative">
+          <button
+            onClick={() => {
+              setShowStrokeMenu(!showStrokeMenu);
+              setShowColorMenu(false);
+              setShowShapeMenu(false);
+              setShowBgMenu(false);
+            }}
+            title="Толщина линии"
+            className="w-7 h-7 rounded-xl hover:bg-slate-100 flex items-center justify-center text-slate-700 transition"
           >
-            <Layers className="w-3.5 h-3.5 text-blue-600" />
-            <span className="hidden sm:inline">
-              {backgrounds.find((b) => b.id === background)?.label || 'Фон'}
-            </span>
-            <ChevronDown className="w-3 h-3 text-slate-600" />
+            <div
+              className="rounded-full bg-slate-800"
+              style={{
+                width: `${Math.max(3, Math.min(14, strokeWidth / 2 + 2))}px`,
+                height: `${Math.max(3, Math.min(14, strokeWidth / 2 + 2))}px`,
+              }}
+            />
+          </button>
+
+          {showStrokeMenu && (
+            <div
+              className="absolute left-full top-0 ml-2 w-40 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2 z-50 animate-in fade-in slide-in-from-left-2"
+              onMouseLeave={() => setShowStrokeMenu(false)}
+            >
+              <div className="text-[11px] font-bold text-slate-600 px-2 py-1 uppercase tracking-wider">
+                Толщина линии
+              </div>
+              <div className="space-y-1">
+                {STROKE_WIDTHS.map((sw) => (
+                  <button
+                    key={sw.size}
+                    onClick={() => {
+                      setStrokeWidth(sw.size);
+                      setShowStrokeMenu(false);
+                    }}
+                    className={`w-full flex items-center justify-between px-2.5 py-1.5 rounded-xl text-xs transition ${
+                      strokeWidth === sw.size
+                        ? 'bg-blue-50 text-blue-700 font-bold'
+                        : 'hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <span>{sw.label}</span>
+                    <div
+                      className="rounded-full bg-current"
+                      style={{
+                        width: `${Math.max(3, Math.min(16, sw.size / 2 + 3))}px`,
+                        height: `${Math.max(3, Math.min(16, sw.size / 2 + 3))}px`,
+                      }}
+                    />
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Background button & flyout */}
+        <div className="relative">
+          <button
+            onClick={() => {
+              setShowBgMenu(!showBgMenu);
+              setShowColorMenu(false);
+              setShowStrokeMenu(false);
+              setShowShapeMenu(false);
+            }}
+            title="Сменить фон доски (Клетка, Линейка, Меловая)"
+            className="p-1.5 rounded-xl text-slate-700 hover:bg-slate-100 transition"
+          >
+            <Layers className="w-4 h-4" />
           </button>
 
           {showBgMenu && (
             <div
-              className="absolute right-0 top-full mt-2 w-60 bg-white rounded-xl shadow-xl border border-slate-200 p-1.5 z-50 animate-in fade-in"
+              className="absolute left-full top-0 ml-2 w-56 bg-white rounded-2xl shadow-2xl border border-slate-200 p-2 z-50 animate-in fade-in slide-in-from-left-2"
               onMouseLeave={() => setShowBgMenu(false)}
             >
-              <div className="text-[11px] font-semibold text-slate-600 px-2 py-1 uppercase tracking-wider">
-                Тип фона доски
+              <div className="text-[11px] font-bold text-slate-600 px-2 py-1 uppercase tracking-wider">
+                Фон доски
               </div>
-              {backgrounds.map((bg) => (
-                <button
-                  key={bg.id}
-                  onClick={() => {
-                    setBackground(bg.id);
-                    getSocket().emit('board:background:set', { background: bg.id });
-                    setShowBgMenu(false);
-                  }}
-                  className={`w-full text-left px-2.5 py-2 rounded-lg transition flex flex-col ${
-                    background === bg.id
-                      ? 'bg-blue-50 text-blue-900 font-semibold'
-                      : 'hover:bg-slate-50 text-slate-700'
-                  }`}
-                >
-                  <span className="text-xs font-semibold">{bg.label}</span>
-                  <span className="text-[10px] text-slate-600">{bg.desc}</span>
-                </button>
-              ))}
+              <div className="space-y-1">
+                {backgrounds.map((bg) => (
+                  <button
+                    key={bg.id}
+                    onClick={() => {
+                      setBackground(bg.id);
+                      getSocket().emit('board:background:set', { background: bg.id });
+                      setShowBgMenu(false);
+                    }}
+                    className={`w-full text-left px-2.5 py-1.5 rounded-xl transition flex flex-col ${
+                      background === bg.id
+                        ? 'bg-blue-50 text-blue-900 font-semibold'
+                        : 'hover:bg-slate-50 text-slate-700'
+                    }`}
+                  >
+                    <span className="text-xs font-semibold">{bg.label}</span>
+                    <span className="text-[10px] text-slate-500">{bg.desc}</span>
+                  </button>
+                ))}
+              </div>
             </div>
           )}
         </div>
       </div>
 
-      {/* Right: Pages, Undo/Redo, Export, Clear */}
-      <div className="flex items-center gap-1">
-        {/* Undo / Redo */}
+      <div className="w-6 h-px bg-slate-200" />
+
+      {/* 4. Board State & Utility Actions */}
+      <div className="flex flex-col items-center gap-1 w-full">
+        {/* Undo */}
         <button
           onClick={onUndo}
           disabled={!canUndo || !canEdit}
           title="Отменить (Ctrl+Z)"
-          className="p-1.5 rounded-lg text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition"
+          className="p-2 rounded-xl text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition"
         >
           <Undo2 className="w-4 h-4" />
         </button>
 
+        {/* Redo */}
         <button
           onClick={onRedo}
           disabled={!canRedo || !canEdit}
           title="Повторить (Ctrl+Y)"
-          className="p-1.5 rounded-lg text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition"
+          className="p-2 rounded-xl text-slate-700 hover:bg-slate-100 disabled:opacity-30 disabled:cursor-not-allowed transition"
         >
           <Redo2 className="w-4 h-4" />
         </button>
 
-        <div className="h-6 w-px bg-slate-200 mx-0.5" />
-
-        {/* Multi-page Navigation */}
-        <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-xl">
-          <button
-            onClick={() => onPageChange(Math.max(0, pageIndex - 1))}
-            disabled={pageIndex === 0}
-            title="Предыдущая страница"
-            className="p-1 rounded text-slate-600 hover:text-slate-900 disabled:opacity-30 transition"
-          >
-            <ChevronLeft className="w-3.5 h-3.5" />
-          </button>
-          <span className="text-xs font-semibold text-slate-700 px-1 whitespace-nowrap">
-            {pageIndex + 1} / {totalPages}
+        {/* Page Switcher */}
+        <div className="flex flex-col items-center bg-slate-100 rounded-xl p-1 w-full">
+          <span className="text-[10px] font-bold text-slate-700 mb-0.5">
+            {pageIndex + 1}/{totalPages}
           </span>
-          <button
-            onClick={() => onPageChange(Math.min(totalPages - 1, pageIndex + 1))}
-            disabled={pageIndex >= totalPages - 1}
-            title="Следующая страница"
-            className="p-1 rounded text-slate-600 hover:text-slate-900 disabled:opacity-30 transition"
-          >
-            <ChevronRight className="w-3.5 h-3.5" />
-          </button>
+          <div className="flex items-center gap-0.5">
+            <button
+              onClick={() => onPageChange(Math.max(0, pageIndex - 1))}
+              disabled={pageIndex === 0}
+              title="Предыдущая страница"
+              className="p-1 rounded text-slate-600 hover:text-slate-900 disabled:opacity-20 transition"
+            >
+              <ChevronLeft className="w-3 h-3" />
+            </button>
+            <button
+              onClick={() => onPageChange(Math.min(totalPages - 1, pageIndex + 1))}
+              disabled={pageIndex >= totalPages - 1}
+              title="Следующая страница"
+              className="p-1 rounded text-slate-600 hover:text-slate-900 disabled:opacity-20 transition"
+            >
+              <ChevronRight className="w-3 h-3" />
+            </button>
+          </div>
           <button
             onClick={onAddPage}
-            title="Добавить новую страницу доски"
-            className="p-1 bg-white rounded shadow-sm text-blue-600 hover:bg-blue-50 transition"
+            title="Добавить страницу"
+            className="w-full mt-1 py-0.5 bg-white hover:bg-blue-50 text-blue-600 rounded text-[10px] font-bold shadow-xs transition flex items-center justify-center"
           >
-            <Plus className="w-3.5 h-3.5" />
+            <Plus className="w-3 h-3" />
           </button>
         </div>
-
-        <div className="h-6 w-px bg-slate-200 mx-0.5" />
 
         {/* Clear Page */}
         <button
           onClick={onClearPage}
           disabled={!canEdit}
-          title="Очистить текущую страницу"
+          title="Очистить доску"
           className="p-2 text-rose-600 hover:bg-rose-50 rounded-xl transition disabled:opacity-30"
         >
           <Trash2 className="w-4 h-4" />
         </button>
 
-        {/* Export */}
+        {/* Export PNG */}
         <button
           onClick={onExport}
-          title="Скачать доску (PNG изображение)"
-          className="px-2.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold transition flex items-center gap-1.5 shadow-sm"
+          title="Скачать доску (PNG)"
+          className="p-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs transition shadow-sm"
         >
-          <Download className="w-3.5 h-3.5" />
-          <span className="hidden md:inline">Экспорт</span>
+          <Download className="w-4 h-4" />
         </button>
       </div>
     </aside>

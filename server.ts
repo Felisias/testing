@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 
 interface Participant {
   id: string;
+  userId?: string;
   name: string;
   role: 'tutor' | 'student';
   color: string;
@@ -44,6 +45,9 @@ interface RoomData {
   activePageIndex: number;
   totalPages: number;
   background: 'grid' | 'dots' | 'lines' | 'blank' | 'dark-grid';
+  timerSeconds: number;
+  isTimerRunning: boolean;
+  timerUpdatedAt: number;
   pages: {
     [pageIndex: number]: WhiteboardElement[];
   };
@@ -52,6 +56,45 @@ interface RoomData {
   };
   chatMessages: ChatMessage[];
 }
+
+interface UserRecord {
+  id: string;
+  username: string;
+  name: string;
+  passwordHash: string;
+  role: 'tutor' | 'student';
+  createdAt: number;
+  savedBoards: {
+    id: string;
+    title: string;
+    subject: string;
+    role: 'tutor' | 'student';
+    lastVisited: number;
+    totalPages?: number;
+  }[];
+}
+
+const users: { [username: string]: UserRecord } = {
+  // Default demo tutor account
+  tutor: {
+    id: 'user-tutor-1',
+    username: 'tutor',
+    name: 'Преподаватель Алексей',
+    passwordHash: '123456',
+    role: 'tutor',
+    createdAt: Date.now(),
+    savedBoards: [
+      {
+        id: 'MATH-2026',
+        title: 'Подготовка к экзамену',
+        subject: 'Математика',
+        role: 'tutor',
+        lastVisited: Date.now(),
+        totalPages: 2,
+      },
+    ],
+  },
+};
 
 const rooms: { [roomId: string]: RoomData } = {};
 
@@ -68,6 +111,9 @@ function getOrCreateRoom(roomId: string, title?: string, subject?: string): Room
       activePageIndex: 0,
       totalPages: 1,
       background: 'grid',
+      timerSeconds: 45 * 60,
+      isTimerRunning: false,
+      timerUpdatedAt: Date.now(),
       pages: {
         0: [],
       },
@@ -102,7 +148,116 @@ async function startServer() {
 
   app.use(express.json({ limit: '10mb' }));
 
-  // API endpoints
+  // ================= Auth & User Endpoints =================
+  // Register
+  app.post('/api/auth/register', (req, res) => {
+    const { username, name, password, tutorCode } = req.body;
+    if (!username || !password || !name) {
+      return res.status(400).json({ error: 'Заполните все обязательные поля' });
+    }
+
+    const cleanUsername = String(username).trim().toLowerCase();
+    if (users[cleanUsername]) {
+      return res.status(409).json({ error: 'Пользователь с таким ником уже существует' });
+    }
+
+    // Role check: secret code 'JDH6188' grants tutor role
+    const isTutorCode = String(tutorCode || '').trim() === 'JDH6188';
+    const role: 'tutor' | 'student' = isTutorCode ? 'tutor' : 'student';
+
+    const newUser: UserRecord = {
+      id: `user-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+      username: cleanUsername,
+      name: String(name).trim(),
+      passwordHash: String(password),
+      role,
+      createdAt: Date.now(),
+      savedBoards: [],
+    };
+
+    users[cleanUsername] = newUser;
+
+    return res.json({
+      success: true,
+      user: {
+        id: newUser.id,
+        username: newUser.username,
+        name: newUser.name,
+        role: newUser.role,
+        createdAt: newUser.createdAt,
+      },
+    });
+  });
+
+  // Login
+  app.post('/api/auth/login', (req, res) => {
+    const { username, password } = req.body;
+    if (!username || !password) {
+      return res.status(400).json({ error: 'Введите логин и пароль' });
+    }
+
+    const cleanUsername = String(username).trim().toLowerCase();
+    const user = users[cleanUsername];
+
+    if (!user || user.passwordHash !== String(password)) {
+      return res.status(401).json({ error: 'Неверный логин или пароль' });
+    }
+
+    return res.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        role: user.role,
+        createdAt: user.createdAt,
+      },
+      savedBoards: user.savedBoards || [],
+    });
+  });
+
+  // User Saved Boards
+  app.get('/api/user/boards', (req, res) => {
+    const username = String(req.query.username || '').trim().toLowerCase();
+    const user = users[username];
+    if (!user) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+    return res.json({ savedBoards: user.savedBoards || [] });
+  });
+
+  // Save board to user history
+  app.post('/api/user/boards/save', (req, res) => {
+    const { username, board } = req.body;
+    const cleanUsername = String(username || '').trim().toLowerCase();
+    const user = users[cleanUsername];
+    if (!user || !board || !board.id) {
+      return res.status(400).json({ error: 'Некорректные данные' });
+    }
+
+    const existingIdx = user.savedBoards.findIndex((b) => b.id === board.id);
+    const boardEntry = {
+      id: board.id,
+      title: board.title || 'Урок',
+      subject: board.subject || 'Математика',
+      role: board.role || user.role,
+      lastVisited: Date.now(),
+      totalPages: board.totalPages || 1,
+    };
+
+    if (existingIdx !== -1) {
+      user.savedBoards[existingIdx] = boardEntry;
+    } else {
+      user.savedBoards.unshift(boardEntry);
+    }
+
+    // Limit to 50 saved boards
+    user.savedBoards = user.savedBoards.slice(0, 50);
+
+    return res.json({ success: true, savedBoards: user.savedBoards });
+  });
+
+  // Health
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', roomsCount: Object.keys(rooms).length });
   });
@@ -111,7 +266,7 @@ async function startServer() {
     const roomId = req.params.roomId.toUpperCase();
     const room = rooms[roomId];
     if (!room) {
-      return res.status(404).json({ error: 'Room not found' });
+      return res.status(404).json({ error: 'Комната не найдена' });
     }
     return res.json({
       id: room.id,
@@ -122,7 +277,7 @@ async function startServer() {
     });
   });
 
-  // Socket.IO Logic
+  // ================= Socket.IO Real-time Logic =================
   io.on('connection', (socket) => {
     let currentRoomId: string | null = null;
     let currentUser: Participant | null = null;
@@ -137,6 +292,7 @@ async function startServer() {
         color,
         title,
         subject,
+        userId,
       }: {
         roomId: string;
         userName: string;
@@ -144,6 +300,7 @@ async function startServer() {
         color?: string;
         title?: string;
         subject?: string;
+        userId?: string;
       }) => {
         const normRoomId = roomId.trim().toUpperCase();
         currentRoomId = normRoomId;
@@ -166,6 +323,7 @@ async function startServer() {
 
         currentUser = {
           id: socket.id,
+          userId,
           name: userName || (role === 'tutor' ? 'Преподаватель' : 'Ученик'),
           role: role || 'student',
           color: assignedColor,
@@ -176,6 +334,13 @@ async function startServer() {
 
         room.participants[socket.id] = currentUser;
         socket.join(normRoomId);
+
+        // Calculate accurate current timer if running
+        let currentTimerSec = room.timerSeconds;
+        if (room.isTimerRunning) {
+          const elapsed = Math.floor((Date.now() - room.timerUpdatedAt) / 1000);
+          currentTimerSec = Math.max(0, room.timerSeconds - elapsed);
+        }
 
         // Send full room state to the newly joined client
         socket.emit('room:state', {
@@ -189,6 +354,8 @@ async function startServer() {
             activePageIndex: room.activePageIndex,
             totalPages: room.totalPages,
             background: room.background,
+            timerSeconds: currentTimerSec,
+            isTimerRunning: room.isTimerRunning,
             pages: room.pages,
             participants: room.participants,
             chatMessages: room.chatMessages,
@@ -213,6 +380,70 @@ async function startServer() {
       }
     );
 
+    // ================= Timer Real-time Sync =================
+    socket.on('timer:start', ({ timerSeconds }: { timerSeconds: number }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      if (currentUser?.role !== 'tutor') return;
+
+      room.timerSeconds = timerSeconds;
+      room.isTimerRunning = true;
+      room.timerUpdatedAt = Date.now();
+
+      io.to(currentRoomId).emit('timer:synced', {
+        timerSeconds: room.timerSeconds,
+        isTimerRunning: true,
+        timerUpdatedAt: room.timerUpdatedAt,
+      });
+    });
+
+    socket.on('timer:pause', ({ timerSeconds }: { timerSeconds: number }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      if (currentUser?.role !== 'tutor') return;
+
+      room.timerSeconds = timerSeconds;
+      room.isTimerRunning = false;
+      room.timerUpdatedAt = Date.now();
+
+      io.to(currentRoomId).emit('timer:synced', {
+        timerSeconds: room.timerSeconds,
+        isTimerRunning: false,
+        timerUpdatedAt: room.timerUpdatedAt,
+      });
+    });
+
+    socket.on('timer:reset', ({ timerSeconds }: { timerSeconds: number }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      if (currentUser?.role !== 'tutor') return;
+
+      room.timerSeconds = timerSeconds;
+      room.isTimerRunning = false;
+      room.timerUpdatedAt = Date.now();
+
+      io.to(currentRoomId).emit('timer:synced', {
+        timerSeconds: room.timerSeconds,
+        isTimerRunning: false,
+        timerUpdatedAt: room.timerUpdatedAt,
+      });
+    });
+
+    socket.on('timer:set', ({ timerSeconds }: { timerSeconds: number }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      if (currentUser?.role !== 'tutor') return;
+
+      room.timerSeconds = timerSeconds;
+      room.timerUpdatedAt = Date.now();
+
+      io.to(currentRoomId).emit('timer:synced', {
+        timerSeconds: room.timerSeconds,
+        isTimerRunning: room.isTimerRunning,
+        timerUpdatedAt: room.timerUpdatedAt,
+      });
+    });
+
     // Whiteboard element additions (Idempotent)
     socket.on(
       'board:element:create',
@@ -236,7 +467,7 @@ async function startServer() {
           room.pages[pageIndex] = [];
         }
 
-        // Idempotency check: only add if ID doesn't already exist
+        // Idempotency check
         const existingIdx = room.pages[pageIndex].findIndex((el) => el.id === element.id);
         if (existingIdx === -1) {
           room.pages[pageIndex].push(element);
@@ -244,12 +475,11 @@ async function startServer() {
           room.pages[pageIndex][existingIdx] = element;
         }
 
-        // Broadcast to others in the room
         socket.to(currentRoomId).emit('board:element:created', { element, pageIndex });
       }
     );
 
-    // Whiteboard element update (e.g. moving/resizing an image or shape)
+    // Whiteboard element update
     socket.on(
       'board:element:update',
       ({
@@ -296,7 +526,7 @@ async function startServer() {
       }
     );
 
-    // Batch element deletion (e.g. eraser area)
+    // Batch element deletion
     socket.on(
       'board:elements:deleteBatch',
       ({
@@ -366,7 +596,7 @@ async function startServer() {
       io.to(currentRoomId).emit('board:lock:changed', { isLocked: room.isLocked });
     });
 
-    // Cursor position broadcast (ephemeral)
+    // Cursor position broadcast
     socket.on('cursor:move', (data: { x: number; y: number; pageIndex: number }) => {
       if (!currentRoomId || !currentUser) return;
       socket.to(currentRoomId).emit('cursor:moved', {
@@ -380,7 +610,7 @@ async function startServer() {
       });
     });
 
-    // Laser pointer (ephemeral laser beam)
+    // Laser pointer
     socket.on('board:laser', (data: { x: number; y: number; pageIndex: number }) => {
       if (!currentRoomId || !currentUser) return;
       socket.to(currentRoomId).emit('board:lasered', {
@@ -410,7 +640,6 @@ async function startServer() {
       };
 
       room.chatMessages.push(msg);
-      // Keep chat to last 100 messages
       if (room.chatMessages.length > 100) {
         room.chatMessages = room.chatMessages.slice(-100);
       }
@@ -427,7 +656,7 @@ async function startServer() {
       });
     });
 
-    // Voice status update (Mute/Unmute/Speaking)
+    // Voice status update
     socket.on('voice:state', (data: { micMuted: boolean; isSpeaking: boolean }) => {
       if (!currentRoomId || !rooms[currentRoomId] || !currentUser) return;
       currentUser.micMuted = data.micMuted;
@@ -463,7 +692,6 @@ async function startServer() {
         const room = rooms[currentRoomId];
         delete room.participants[socket.id];
 
-        // Leave message
         const leaveMsg: ChatMessage = {
           id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
           userId: 'system',
@@ -480,7 +708,6 @@ async function startServer() {
         });
         io.to(currentRoomId).emit('chat:message', leaveMsg);
 
-        // If room is empty, clean up after 1 hour
         if (Object.keys(room.participants).length === 0) {
           setTimeout(() => {
             if (rooms[currentRoomId!] && Object.keys(rooms[currentRoomId!].participants).length === 0) {
