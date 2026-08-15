@@ -310,7 +310,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                     : 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/40'
                 }`}
               >
-                {currentUser.role === 'tutor' ? '👨‍🏫 Репетитор' : '👨‍🎓 Ученик'}
+                {currentUser.role === 'tutor' ? 'Преподаватель' : 'Ученик'}
               </span>
             </div>
           )}

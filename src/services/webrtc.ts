@@ -20,6 +20,7 @@ export class VoiceManager {
   private speakingThreshold: number = 15; // 0-100 scale
   private audioContainer: HTMLElement | null = null;
 
+  // Reliable free STUN servers
   private rtcConfig: RTCConfiguration = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -30,6 +31,7 @@ export class VoiceManager {
       { urls: 'stun:stun.cloudflare.com:3478' },
       { urls: 'stun:stun.services.mozilla.com:3478' },
     ],
+    iceCandidatePoolSize: 10,
   };
 
   constructor() {
@@ -57,14 +59,19 @@ export class VoiceManager {
     return container;
   }
 
+  // Auto unlock browser audio on any user gesture
   private setupUserGestureUnlock() {
     const unlock = () => {
       if (this.audioContext && this.audioContext.state === 'suspended') {
         this.audioContext.resume().catch(() => {});
       }
       this.peerConnections.forEach((peer) => {
-        if (peer.audioElement && peer.audioElement.paused) {
-          peer.audioElement.play().catch(() => {});
+        if (peer.audioElement) {
+          peer.audioElement.muted = this.isDeafened;
+          peer.audioElement.volume = 1.0;
+          if (peer.audioElement.paused) {
+            peer.audioElement.play().catch(() => {});
+          }
         }
       });
     };
@@ -72,6 +79,7 @@ export class VoiceManager {
     window.addEventListener('click', unlock, { passive: true });
     window.addEventListener('keydown', unlock, { passive: true });
     window.addEventListener('pointerdown', unlock, { passive: true });
+    window.addEventListener('touchstart', unlock, { passive: true });
   }
 
   private setupSocketListeners() {
@@ -91,7 +99,7 @@ export class VoiceManager {
           if (type === 'offer') {
             await peer.connection.setRemoteDescription(new RTCSessionDescription(signal));
 
-            // Add local stream tracks if not already added
+            // Ensure our local tracks are attached before answering
             if (this.localStream) {
               const senders = peer.connection.getSenders();
               this.localStream.getAudioTracks().forEach((track) => {
@@ -172,7 +180,7 @@ export class VoiceManager {
         console.warn('AudioContext visualization not supported:', e);
       }
 
-      // Attach local stream tracks to all existing peer connections and renegotiate if needed
+      // Attach tracks to all existing peer connections and renegotiate
       this.peerConnections.forEach((peer, peerId) => {
         const senders = peer.connection.getSenders();
         stream.getAudioTracks().forEach((track) => {
@@ -232,7 +240,7 @@ export class VoiceManager {
     try {
       connection.addTransceiver('audio', { direction: 'sendrecv' });
     } catch (e) {
-      // Fallback for older browsers
+      // Older browser fallback
     }
 
     // Add local tracks if available
@@ -273,6 +281,7 @@ export class VoiceManager {
 
         audioEl.srcObject = stream;
         audioEl.volume = 1.0;
+        audioEl.muted = this.isDeafened;
 
         const playPromise = audioEl.play();
         if (playPromise !== undefined) {
@@ -299,7 +308,6 @@ export class VoiceManager {
           this.onSpeakingChangeCallback?.(false);
           getSocket().emit('voice:state', { micMuted: this.isMuted, isSpeaking: false });
         }
-        this.onVolumeChangeCallback?.(0);
         this.animationFrameId = requestAnimationFrame(checkVolume);
         return;
       }
@@ -310,24 +318,50 @@ export class VoiceManager {
         sum += dataArray[i];
       }
       const average = sum / bufferLength;
-      const normalizedVolume = Math.min(100, Math.round((average / 128) * 100));
+      const normalizedVol = Math.min(100, Math.round((average / 128) * 100));
 
-      this.onVolumeChangeCallback?.(normalizedVolume);
+      this.onVolumeChangeCallback?.(normalizedVol);
 
-      const currentlySpeaking = normalizedVolume > this.speakingThreshold;
-      if (currentlySpeaking !== this.isSpeaking) {
-        this.isSpeaking = currentlySpeaking;
-        this.onSpeakingChangeCallback?.(currentlySpeaking);
-        getSocket().emit('voice:state', {
-          micMuted: this.isMuted,
-          isSpeaking: currentlySpeaking,
-        });
+      const speakingNow = normalizedVol > this.speakingThreshold;
+      if (speakingNow !== this.isSpeaking) {
+        this.isSpeaking = speakingNow;
+        this.onSpeakingChangeCallback?.(speakingNow);
+        getSocket().emit('voice:state', { micMuted: this.isMuted, isSpeaking: speakingNow });
       }
 
       this.animationFrameId = requestAnimationFrame(checkVolume);
     };
 
     checkVolume();
+  }
+
+  public toggleMute(): boolean {
+    this.setMicrophoneMuted(!this.isMuted);
+    return this.isMuted;
+  }
+
+  public toggleDeafen(): boolean {
+    this.setDeafened(!this.isDeafened);
+    return this.isDeafened;
+  }
+
+  public setMicrophoneMuted(muted: boolean) {
+    this.isMuted = muted;
+    if (this.localStream) {
+      this.localStream.getAudioTracks().forEach((track) => {
+        track.enabled = !muted;
+      });
+    }
+    getSocket().emit('voice:state', { micMuted: muted, isSpeaking: false });
+  }
+
+  public setDeafened(deafened: boolean) {
+    this.isDeafened = deafened;
+    this.peerConnections.forEach((peer) => {
+      if (peer.audioElement) {
+        peer.audioElement.muted = deafened;
+      }
+    });
   }
 
   public setVolumeCallback(cb: (vol: number) => void) {
@@ -338,46 +372,23 @@ export class VoiceManager {
     this.onSpeakingChangeCallback = cb;
   }
 
-  public toggleMute(): boolean {
-    this.isMuted = !this.isMuted;
-    if (this.localStream) {
-      this.localStream.getAudioTracks().forEach((track) => {
-        track.enabled = !this.isMuted;
-      });
-    }
-    getSocket().emit('voice:state', {
-      micMuted: this.isMuted,
-      isSpeaking: false,
-    });
-    return this.isMuted;
+  public onVolumeChange(cb: (vol: number) => void) {
+    this.onVolumeChangeCallback = cb;
   }
 
-  public getIsMuted(): boolean {
-    return this.isMuted;
-  }
-
-  public toggleDeafen(): boolean {
-    this.isDeafened = !this.isDeafened;
-    this.peerConnections.forEach((peer) => {
-      if (peer.audioElement) {
-        peer.audioElement.muted = this.isDeafened;
-      }
-    });
-    return this.isDeafened;
-  }
-
-  public getIsDeafened(): boolean {
-    return this.isDeafened;
+  public onSpeakingChange(cb: (speaking: boolean) => void) {
+    this.onSpeakingChangeCallback = cb;
   }
 
   public removePeer(peerId: string) {
     const peer = this.peerConnections.get(peerId);
     if (peer) {
-      peer.connection.close();
       if (peer.audioElement) {
+        peer.audioElement.pause();
         peer.audioElement.srcObject = null;
         peer.audioElement.remove();
       }
+      peer.connection.close();
       this.peerConnections.delete(peerId);
     }
   }
@@ -390,16 +401,16 @@ export class VoiceManager {
       this.localStream.getTracks().forEach((track) => track.stop());
       this.localStream = null;
     }
-    if (this.audioContext) {
+    if (this.audioContext && this.audioContext.state !== 'closed') {
       this.audioContext.close().catch(() => {});
       this.audioContext = null;
     }
     this.peerConnections.forEach((peer) => {
-      peer.connection.close();
       if (peer.audioElement) {
-        peer.audioElement.srcObject = null;
+        peer.audioElement.pause();
         peer.audioElement.remove();
       }
+      peer.connection.close();
     });
     this.peerConnections.clear();
   }

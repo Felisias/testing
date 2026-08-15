@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   ToolType,
   BackgroundType,
@@ -11,6 +11,7 @@ import {
   ChatMessage,
   ImageElement,
 } from './types';
+import { KeybindSettings, DEFAULT_KEYBINDS } from './types/extra';
 import { getSocket, disconnectSocket } from './services/socket';
 import { voiceManager } from './services/webrtc';
 import { Canvas } from './components/Whiteboard/Canvas';
@@ -21,7 +22,11 @@ import { JoinModal } from './components/Room/JoinModal';
 import { ChatDrawer } from './components/Chat/ChatDrawer';
 import { ParticipantsDrawer } from './components/Room/ParticipantsDrawer';
 import { MathToolbar } from './components/MathToolbar';
+import { SettingsModal } from './components/Room/SettingsModal';
+import { CodeIDE } from './components/IDE/CodeIDE';
 import confetti from 'canvas-confetti';
+
+const KEYBINDS_STORAGE_KEY = 'tutorboard_keybinds';
 
 export default function App() {
   // Session & User State
@@ -33,6 +38,19 @@ export default function App() {
   const [userName, setUserName] = useState('');
   const [userColor, setUserColor] = useState('#2563EB');
   const [myUserId, setMyUserId] = useState('');
+
+  // Mode View (Whiteboard vs Collaborative IDE)
+  const [activeView, setActiveView] = useState<'board' | 'ide'>('board');
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+
+  // Keybinds state
+  const [keybinds, setKeybinds] = useState<KeybindSettings>(() => {
+    try {
+      const saved = localStorage.getItem(KEYBINDS_STORAGE_KEY);
+      if (saved) return { ...DEFAULT_KEYBINDS, ...JSON.parse(saved) };
+    } catch {}
+    return DEFAULT_KEYBINDS;
+  });
 
   // Whiteboard State
   const [tool, setTool] = useState<ToolType>('pen');
@@ -94,7 +112,7 @@ export default function App() {
     [activePageIndex]
   );
 
-  // Undo / Redo handlers
+  // Undo / Redo handlers with stable batch sync (Fixes the disappearing/flickering bug)
   const handleUndo = useCallback(() => {
     setUndoStack((prevUndo) => {
       const pageUndo = prevUndo[activePageIndex] || [];
@@ -102,12 +120,13 @@ export default function App() {
 
       const previousState = pageUndo[pageUndo.length - 1];
       const remainingUndo = pageUndo.slice(0, -1);
+      const currentList = pages[activePageIndex] || [];
 
       setRedoStack((prevRedo) => {
         const pageRedo = prevRedo[activePageIndex] || [];
         return {
           ...prevRedo,
-          [activePageIndex]: [...pageRedo, pages[activePageIndex] || []],
+          [activePageIndex]: [...pageRedo, currentList],
         };
       });
 
@@ -116,11 +135,11 @@ export default function App() {
         [activePageIndex]: previousState,
       }));
 
-      // Sync with server (replace page)
+      // Direct clean sync: replace entire page atomically
       const socket = getSocket();
-      socket.emit('board:clear', { pageIndex: activePageIndex });
-      previousState.forEach((el) => {
-        socket.emit('board:element:create', { element: el, pageIndex: activePageIndex });
+      socket.emit('board:elements:replace', {
+        pageIndex: activePageIndex,
+        elements: previousState,
       });
 
       return {
@@ -137,12 +156,13 @@ export default function App() {
 
       const nextState = pageRedo[pageRedo.length - 1];
       const remainingRedo = pageRedo.slice(0, -1);
+      const currentList = pages[activePageIndex] || [];
 
       setUndoStack((prevUndo) => {
         const pageUndo = prevUndo[activePageIndex] || [];
         return {
           ...prevUndo,
-          [activePageIndex]: [...pageUndo, pages[activePageIndex] || []],
+          [activePageIndex]: [...pageUndo, currentList],
         };
       });
 
@@ -152,9 +172,9 @@ export default function App() {
       }));
 
       const socket = getSocket();
-      socket.emit('board:clear', { pageIndex: activePageIndex });
-      nextState.forEach((el) => {
-        socket.emit('board:element:create', { element: el, pageIndex: activePageIndex });
+      socket.emit('board:elements:replace', {
+        pageIndex: activePageIndex,
+        elements: nextState,
       });
 
       return {
@@ -223,7 +243,7 @@ export default function App() {
       setParticipants(room.participants || {});
       setChatMessages(room.chatMessages || []);
 
-      // Initiate WebRTC peer connections with existing participants
+      // Automatically initiate WebRTC calls with all existing peers
       Object.keys(room.participants || {}).forEach((peerId) => {
         if (peerId !== self.id) {
           voiceManager.callPeer(peerId);
@@ -308,6 +328,16 @@ export default function App() {
             [pageIndex]: pageList.filter((el) => !idsSet.has(el.id)),
           };
         });
+      }
+    );
+
+    socket.on(
+      'board:elements:replaced',
+      ({ elements, pageIndex }: { elements: WhiteboardElement[]; pageIndex: number }) => {
+        setPages((prev) => ({
+          ...prev,
+          [pageIndex]: elements || [],
+        }));
       }
     );
 
@@ -400,6 +430,7 @@ export default function App() {
       socket.off('board:element:updated');
       socket.off('board:element:deleted');
       socket.off('board:elements:deletedBatch');
+      socket.off('board:elements:replaced');
       socket.off('board:cleared');
       socket.off('board:page:changed');
       socket.off('board:page:added');
@@ -469,31 +500,57 @@ export default function App() {
     }
   };
 
-  // Keyboard shortcuts (M for mic mute, Ctrl+Z for undo, Ctrl+Y for redo)
+  const handleSaveKeybinds = (newKeybinds: KeybindSettings) => {
+    setKeybinds(newKeybinds);
+    try {
+      localStorage.setItem(KEYBINDS_STORAGE_KEY, JSON.stringify(newKeybinds));
+      showToast('Горячие клавиши сохранены!');
+    } catch {}
+  };
+
+  // Keyboard shortcuts & keybind dispatch
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
         return;
       }
-      if (e.key === 'm' || e.key === 'M' || e.key === 'ь' || e.key === 'Ь') {
-        voiceManager.toggleMute();
-      }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+
+      // Undo / Redo
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
         if (e.shiftKey) {
           handleRedo();
         } else {
           handleUndo();
         }
+        return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault();
         handleRedo();
+        return;
       }
+
+      const pressedKey = e.key.toLowerCase();
+
+      // Tool keybind mappings
+      if (pressedKey === keybinds.select) setTool('select');
+      else if (pressedKey === keybinds.pan) setTool('pan');
+      else if (pressedKey === keybinds.pen) setTool('pen');
+      else if (pressedKey === keybinds.highlighter) setTool('highlighter');
+      else if (pressedKey === keybinds.eraser) setTool('eraser');
+      else if (pressedKey === keybinds.line) setTool('line');
+      else if (pressedKey === keybinds.rect) setTool('rect');
+      else if (pressedKey === keybinds.circle) setTool('circle');
+      else if (pressedKey === keybinds.triangle) setTool('triangle');
+      else if (pressedKey === keybinds.text) setTool('text');
+      else if (pressedKey === keybinds.laser) setTool('laser');
+      else if (pressedKey === keybinds.clear) handleClearPage();
     };
+
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleUndo, handleRedo]);
+  }, [keybinds, handleUndo, handleRedo, handleClearPage]);
 
   if (!isInRoom) {
     return <JoinModal onJoinRoom={handleJoinRoom} />;
@@ -508,7 +565,7 @@ export default function App() {
       id="tutorboard-app"
       className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-900 font-sans selection:bg-blue-600 selection:text-white"
     >
-      {/* Top Header with Room Code, Timer & Tutor Controls */}
+      {/* Top Header with Room Code, Timer, IDE toggle & Tutor Controls */}
       <RoomHeader
         roomId={roomId}
         roomTitle={roomTitle}
@@ -524,98 +581,111 @@ export default function App() {
         }}
         onToggleParticipants={() => setIsParticipantsOpen(!isParticipantsOpen)}
         onLeaveRoom={handleLeaveRoom}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenIDE={() => setActiveView(activeView === 'ide' ? 'board' : 'ide')}
       />
 
-      {/* Main Workspace Area */}
+      {/* Main Workspace Area (Whiteboard OR Collaborative IDE) */}
       <div className="flex-1 relative flex overflow-hidden">
-        {/* Central Whiteboard Canvas */}
-        <div className="flex-1 relative h-full w-full">
-          <Canvas
-            tool={tool}
-            color={color}
-            strokeWidth={strokeWidth}
-            background={background}
-            elements={currentElements}
-            setElements={setCurrentElements}
-            pageIndex={activePageIndex}
-            isLocked={isLocked}
-            userRole={userRole}
+        {activeView === 'ide' ? (
+          <CodeIDE
+            roomId={roomId}
+            myUserId={myUserId}
             userName={userName}
+            userRole={userRole}
             userColor={userColor}
-            zoom={zoom}
-            setZoom={setZoom}
-            panOffset={panOffset}
-            setPanOffset={setPanOffset}
-            cursors={cursors}
-            laserPoints={laserPoints}
-            addLaserPoint={(lp) => setLaserPoints((prev) => [...prev.slice(-40), lp])}
-            activeMathInsert={activeMathInsert}
-            onMathInserted={() => setActiveMathInsert(undefined)}
+            onBackToBoard={() => setActiveView('board')}
           />
-
-          {/* Vertical Toolbar Docked at Left Border */}
-          <div className="absolute top-4 left-3 z-40">
-            <Toolbar
+        ) : (
+          /* Central Whiteboard Canvas */
+          <div className="flex-1 relative h-full w-full">
+            <Canvas
               tool={tool}
-              setTool={setTool}
               color={color}
-              setColor={setColor}
               strokeWidth={strokeWidth}
-              setStrokeWidth={setStrokeWidth}
               background={background}
-              setBackground={setBackground}
-              canEdit={canEdit}
+              elements={currentElements}
+              setElements={setCurrentElements}
+              pageIndex={activePageIndex}
+              isLocked={isLocked}
               userRole={userRole}
               userName={userName}
               userColor={userColor}
-              pageIndex={activePageIndex}
-              totalPages={totalPages}
-              onPageChange={handlePageChange}
-              onAddPage={handleAddPage}
-              onClearPage={handleClearPage}
-              canUndo={canUndo}
-              canRedo={canRedo}
-              onUndo={handleUndo}
-              onRedo={handleRedo}
-              onImageUploaded={handleImageUploaded}
-              onExport={handleExportPNG}
-              onToggleMath={() => setIsMathOpen(!isMathOpen)}
-              isMathOpen={isMathOpen}
+              zoom={zoom}
+              setZoom={setZoom}
+              panOffset={panOffset}
+              setPanOffset={setPanOffset}
+              cursors={cursors}
+              laserPoints={laserPoints}
+              addLaserPoint={(lp) => setLaserPoints((prev) => [...prev.slice(-40), lp])}
+              activeMathInsert={activeMathInsert}
+              onMathInserted={() => setActiveMathInsert(undefined)}
             />
-          </div>
 
-          {/* Floating Math Symbols Drawer at Left (opens next to toolbar) */}
-          {isMathOpen && (
-            <div className="absolute top-4 left-16 z-40">
-              <MathToolbar
-                isOpen={isMathOpen}
-                onToggle={() => setIsMathOpen(!isMathOpen)}
-                onInsertSymbol={(sym) => {
-                  setActiveMathInsert(sym);
-                  setTool('text');
-                  showToast(`Символ ${sym} готов к вставке в текст`);
-                }}
+            {/* Vertical Toolbar Docked at Left Border */}
+            <div className="absolute top-4 left-3 z-40">
+              <Toolbar
+                tool={tool}
+                setTool={setTool}
+                color={color}
+                setColor={setColor}
+                strokeWidth={strokeWidth}
+                setStrokeWidth={setStrokeWidth}
+                background={background}
+                setBackground={setBackground}
+                canEdit={canEdit}
+                userRole={userRole}
+                userName={userName}
+                userColor={userColor}
+                pageIndex={activePageIndex}
+                totalPages={totalPages}
+                onPageChange={handlePageChange}
+                onAddPage={handleAddPage}
+                onClearPage={handleClearPage}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onUndo={handleUndo}
+                onRedo={handleRedo}
+                onImageUploaded={handleImageUploaded}
+                onExport={handleExportPNG}
+                onToggleMath={() => setIsMathOpen(!isMathOpen)}
+                isMathOpen={isMathOpen}
               />
             </div>
-          )}
 
-          {/* Floating Bottom Voice Controls Bar */}
-          <div className="absolute bottom-4 left-16 z-30 max-w-[calc(100%-160px)]">
-            <VoiceControls
-              participants={participants}
-              currentUserId={myUserId}
-              userRole={userRole}
-              userName={userName}
-            />
-          </div>
+            {/* Floating Math Symbols Drawer at Left (opens next to toolbar) */}
+            {isMathOpen && (
+              <div className="absolute top-4 left-16 z-40">
+                <MathToolbar
+                  isOpen={isMathOpen}
+                  onToggle={() => setIsMathOpen(!isMathOpen)}
+                  onInsertSymbol={(sym) => {
+                    setActiveMathInsert(sym);
+                    setTool('text');
+                    showToast(`Символ ${sym} готов к вставке в текст`);
+                  }}
+                />
+              </div>
+            )}
 
-          {/* Toast Notifications */}
-          {notificationToast && (
-            <div className="absolute top-4 right-4 z-50 bg-slate-900/90 backdrop-blur text-white px-4 py-2.5 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-top-4 border border-slate-700">
-              <span>{notificationToast}</span>
+            {/* Floating Bottom Voice Controls Bar */}
+            <div className="absolute bottom-4 left-16 z-30 max-w-[calc(100%-160px)]">
+              <VoiceControls
+                participants={participants}
+                currentUserId={myUserId}
+                userRole={userRole}
+                userName={userName}
+              />
             </div>
-          )}
-        </div>
+
+            {/* Toast Notifications */}
+            {notificationToast && (
+              <div className="absolute top-4 right-4 z-50 bg-slate-900/90 backdrop-blur text-white px-4 py-2.5 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-top-4 border border-slate-700">
+                <span>{notificationToast}</span>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Real-time Text Chat Drawer */}
         <ChatDrawer
@@ -635,6 +705,14 @@ export default function App() {
           participants={participants}
           currentUserId={myUserId}
           userRole={userRole}
+        />
+
+        {/* Settings Modal (Keybinds) */}
+        <SettingsModal
+          isOpen={isSettingsOpen}
+          onClose={() => setIsSettingsOpen(false)}
+          keybinds={keybinds}
+          onSaveKeybinds={handleSaveKeybinds}
         />
       </div>
     </div>

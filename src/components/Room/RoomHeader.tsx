@@ -19,6 +19,8 @@ import {
   MessageSquare,
   LogOut,
   ChevronDown,
+  Settings,
+  Code2,
 } from 'lucide-react';
 
 interface RoomHeaderProps {
@@ -33,6 +35,8 @@ interface RoomHeaderProps {
   onToggleChat: () => void;
   onToggleParticipants: () => void;
   onLeaveRoom: () => void;
+  onOpenSettings: () => void;
+  onOpenIDE: () => void;
 }
 
 export const RoomHeader: React.FC<RoomHeaderProps> = ({
@@ -47,6 +51,8 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   onToggleChat,
   onToggleParticipants,
   onLeaveRoom,
+  onOpenSettings,
+  onOpenIDE,
 }) => {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -60,9 +66,15 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   // Listen for real-time timer sync from tutor/server
   useEffect(() => {
     const socket = getSocket();
-    const handleTimerSync = (data: { seconds: number; isRunning: boolean }) => {
-      setTimerSeconds(data.seconds);
-      setIsTimerRunning(data.isRunning);
+    const handleTimerSync = (data: { seconds?: number; timerSeconds?: number; isRunning?: boolean; isTimerRunning?: boolean }) => {
+      const sec = data.timerSeconds ?? data.seconds;
+      const running = data.isTimerRunning ?? data.isRunning;
+      if (typeof sec === 'number') {
+        setTimerSeconds(sec);
+      }
+      if (typeof running === 'boolean') {
+        setIsTimerRunning(running);
+      }
     };
 
     socket.on('timer:synced', handleTimerSync);
@@ -125,10 +137,10 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
     const socket = getSocket();
     if (isTimerRunning) {
       setIsTimerRunning(false);
-      socket.emit('timer:pause');
+      socket.emit('timer:pause', { timerSeconds });
     } else {
       setIsTimerRunning(true);
-      socket.emit('timer:start');
+      socket.emit('timer:start', { timerSeconds });
     }
   };
 
@@ -136,14 +148,14 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
     setTimerSeconds(seconds);
     setIsTimerRunning(false);
     setShowTimerMenu(false);
-    getSocket().emit('timer:set', { seconds });
+    getSocket().emit('timer:set', { seconds, timerSeconds: seconds });
   };
 
   const handleResetTimer = () => {
     setTimerSeconds(45 * 60);
     setIsTimerRunning(false);
     setShowTimerMenu(false);
-    getSocket().emit('timer:reset');
+    getSocket().emit('timer:reset', { timerSeconds: 45 * 60 });
   };
 
   const formatTime = (totalSec: number) => {
@@ -175,7 +187,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
               </span>
             </div>
             <p className="text-[11px] text-slate-600">
-              Вы вошли как: <span className="font-semibold text-slate-800">{userName}</span> ({userRole === 'tutor' ? '👨‍🏫 Преподаватель' : '👨‍🎓 Ученик'})
+              Вы вошли как: <span className="font-semibold text-slate-800">{userName}</span> ({userRole === 'tutor' ? 'Преподаватель' : 'Ученик'})
             </p>
           </div>
         </div>
@@ -275,8 +287,27 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
         )}
       </div>
 
-      {/* Right: Tutor Special Tools & Navigation Actions */}
+      {/* Right: Tools, IDE, Settings, Superpowers & Actions */}
       <div className="flex items-center gap-2">
+        {/* Switch to IDE (Среда разработки) */}
+        <button
+          onClick={onOpenIDE}
+          title="Перейти в совместную среду разработки (Код IDE)"
+          className="px-3 py-1.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-md shadow-slate-900/20"
+        >
+          <Code2 className="w-4 h-4 text-emerald-400" />
+          <span className="hidden sm:inline">Среда разработки</span>
+        </button>
+
+        {/* Settings button */}
+        <button
+          onClick={onOpenSettings}
+          title="Настройки горячих клавиш инструментов"
+          className="p-2 rounded-xl border border-slate-200 hover:bg-slate-50 text-slate-700 transition"
+        >
+          <Settings className="w-4 h-4 text-slate-600" />
+        </button>
+
         {/* Tutor Only Superpowers */}
         {userRole === 'tutor' && (
           <div className="flex items-center gap-1 bg-amber-50 p-1 rounded-xl border border-amber-200">

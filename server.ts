@@ -381,67 +381,106 @@ async function startServer() {
     );
 
     // ================= Timer Real-time Sync =================
-    socket.on('timer:start', ({ timerSeconds }: { timerSeconds: number }) => {
+    socket.on('timer:start', (data?: { timerSeconds?: number }) => {
       if (!currentRoomId || !rooms[currentRoomId]) return;
       const room = rooms[currentRoomId];
       if (currentUser?.role !== 'tutor') return;
 
-      room.timerSeconds = timerSeconds;
+      if (data && typeof data.timerSeconds === 'number') {
+        room.timerSeconds = data.timerSeconds;
+      }
       room.isTimerRunning = true;
       room.timerUpdatedAt = Date.now();
 
       io.to(currentRoomId).emit('timer:synced', {
         timerSeconds: room.timerSeconds,
+        seconds: room.timerSeconds,
         isTimerRunning: true,
+        isRunning: true,
         timerUpdatedAt: room.timerUpdatedAt,
       });
     });
 
-    socket.on('timer:pause', ({ timerSeconds }: { timerSeconds: number }) => {
+    socket.on('timer:pause', (data?: { timerSeconds?: number }) => {
       if (!currentRoomId || !rooms[currentRoomId]) return;
       const room = rooms[currentRoomId];
       if (currentUser?.role !== 'tutor') return;
 
-      room.timerSeconds = timerSeconds;
+      if (data && typeof data.timerSeconds === 'number') {
+        room.timerSeconds = data.timerSeconds;
+      }
       room.isTimerRunning = false;
       room.timerUpdatedAt = Date.now();
 
       io.to(currentRoomId).emit('timer:synced', {
         timerSeconds: room.timerSeconds,
+        seconds: room.timerSeconds,
         isTimerRunning: false,
+        isRunning: false,
         timerUpdatedAt: room.timerUpdatedAt,
       });
     });
 
-    socket.on('timer:reset', ({ timerSeconds }: { timerSeconds: number }) => {
+    socket.on('timer:reset', (data?: { timerSeconds?: number }) => {
       if (!currentRoomId || !rooms[currentRoomId]) return;
       const room = rooms[currentRoomId];
       if (currentUser?.role !== 'tutor') return;
 
-      room.timerSeconds = timerSeconds;
+      room.timerSeconds = data?.timerSeconds ?? 45 * 60;
       room.isTimerRunning = false;
       room.timerUpdatedAt = Date.now();
 
       io.to(currentRoomId).emit('timer:synced', {
         timerSeconds: room.timerSeconds,
+        seconds: room.timerSeconds,
         isTimerRunning: false,
+        isRunning: false,
         timerUpdatedAt: room.timerUpdatedAt,
       });
     });
 
-    socket.on('timer:set', ({ timerSeconds }: { timerSeconds: number }) => {
+    socket.on('timer:set', ({ timerSeconds, seconds }: { timerSeconds?: number; seconds?: number }) => {
       if (!currentRoomId || !rooms[currentRoomId]) return;
       const room = rooms[currentRoomId];
       if (currentUser?.role !== 'tutor') return;
 
-      room.timerSeconds = timerSeconds;
+      const sec = timerSeconds ?? seconds ?? 45 * 60;
+      room.timerSeconds = sec;
       room.timerUpdatedAt = Date.now();
 
       io.to(currentRoomId).emit('timer:synced', {
         timerSeconds: room.timerSeconds,
+        seconds: room.timerSeconds,
         isTimerRunning: room.isTimerRunning,
+        isRunning: room.isTimerRunning,
         timerUpdatedAt: room.timerUpdatedAt,
       });
+    });
+
+    // ================= IDE / Code Sandbox Real-time Sync =================
+    socket.on('ide:code:change', (data: { fileId: string; content: string; senderId: string }) => {
+      if (!currentRoomId) return;
+      socket.to(currentRoomId).emit('ide:code:sync', data);
+    });
+
+    socket.on('ide:file:create', (data: { file: any }) => {
+      if (!currentRoomId) return;
+      socket.to(currentRoomId).emit('ide:file:created', data);
+    });
+
+    socket.on('ide:file:delete', (data: { fileId: string }) => {
+      if (!currentRoomId) return;
+      socket.to(currentRoomId).emit('ide:file:deleted', data);
+    });
+
+    socket.on('ide:cursor:move', (cursor: any) => {
+      if (!currentRoomId) return;
+      socket.to(currentRoomId).emit('ide:cursor:sync', cursor);
+    });
+
+    socket.on('ide:output:sync', (data: { output: string; senderName: string }) => {
+      if (!currentRoomId) return;
+      socket.to(currentRoomId).emit('ide:output:sync', data);
     });
 
     // Whiteboard element additions (Idempotent)
@@ -557,6 +596,25 @@ async function startServer() {
       room.pages[pageIndex] = [];
       io.to(currentRoomId).emit('board:cleared', { pageIndex });
     });
+
+    // Replace board page elements (Atomic Undo / Redo synchronization)
+    socket.on(
+      'board:elements:replace',
+      ({
+        elements,
+        pageIndex,
+      }: {
+        elements: WhiteboardElement[];
+        pageIndex: number;
+      }) => {
+        if (!currentRoomId || !rooms[currentRoomId]) return;
+        const room = rooms[currentRoomId];
+        if (room.isLocked && currentUser?.role !== 'tutor') return;
+
+        room.pages[pageIndex] = elements || [];
+        socket.to(currentRoomId).emit('board:elements:replaced', { elements: room.pages[pageIndex], pageIndex });
+      }
+    );
 
     // Page management
     socket.on('board:page:change', ({ pageIndex }: { pageIndex: number }) => {
