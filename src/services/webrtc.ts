@@ -393,6 +393,10 @@ export class VoiceManager {
     }
   }
 
+  public leave() {
+    this.cleanup();
+  }
+
   public cleanup() {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);

@@ -1,1 +1,93 @@
 @import "tailwindcss";
+
+/* VS Code Dark+ Standard Syntax Highlighting Tokens */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #6a9955 !important;
+  font-style: italic;
+}
+
+.token.punctuation {
+  color: #d4d4d4 !important;
+}
+
+.token.namespace {
+  opacity: 0.8;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #b5cea8 !important;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #ce9178 !important;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+  color: #d4d4d4 !important;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #569cd6 !important;
+  font-weight: 600;
+}
+
+.token.function,
+.token.class-name {
+  color: #dcdcaa !important;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #9cdcfe !important;
+}
+
+.token.type-annotation,
+.token.type,
+.token.class-name {
+  color: #4ec9b0 !important;
+}
+
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+.token.italic {
+  font-style: italic;
+}
+
+/* Custom transparent text selection for dual-layer syntax highlighter */
+.code-editor-textarea {
+  color: transparent !important;
+  caret-color: #38bdf8 !important;
+}
+
+.code-editor-textarea::selection {
+  background-color: rgba(59, 130, 246, 0.4) !important;
+  color: transparent !important;
+}
+
+.code-editor-textarea::-moz-selection {
+  background-color: rgba(59, 130, 246, 0.4) !important;
+  color: transparent !important;
+}

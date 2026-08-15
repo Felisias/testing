@@ -43,6 +43,7 @@ export interface CodeCursor {
   userId: string;
   userName: string;
   color: string;
+  avatar?: string;
   lineNumber: number;
   column: number;
 }

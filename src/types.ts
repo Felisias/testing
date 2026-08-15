@@ -5,6 +5,7 @@ export interface UserAccount {
   username: string;
   name: string;
   role: UserRole;
+  avatar?: string;
   createdAt: number;
 }
 
@@ -22,6 +23,7 @@ export interface Participant {
   userId?: string;
   name: string;
   role: UserRole;
+  avatar?: string;
   color: string;
   micMuted: boolean;
   isSpeaking: boolean;
@@ -112,6 +114,7 @@ export interface LaserPoint {
   userId: string;
   userName: string;
   color: string;
+  avatar?: string;
   x: number;
   y: number;
   timestamp: number;
@@ -121,6 +124,7 @@ export interface CursorPosition {
   userId: string;
   userName: string;
   role: UserRole;
+  avatar?: string;
   color: string;
   x: number;
   y: number;
@@ -131,6 +135,7 @@ export interface ChatMessage {
   userId: string;
   userName: string;
   role: UserRole;
+  avatar?: string;
   text: string;
   formula?: string;
   timestamp: number;

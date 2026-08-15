@@ -1,15 +1,13 @@
 import React from 'react';
 import { Participant, UserRole } from '../../types';
+import { UserAvatar } from '../Common/UserAvatar';
 import { getSocket } from '../../services/socket';
 import {
   Users,
   X,
   Mic,
   MicOff,
-  GraduationCap,
-  Sparkles,
   Star,
-  Bell,
   Crown,
 } from 'lucide-react';
 
@@ -19,6 +17,7 @@ interface ParticipantsDrawerProps {
   participants: Record<string, Participant>;
   currentUserId: string;
   userRole: UserRole;
+  onChangeAvatar?: () => void;
 }
 
 export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
@@ -27,6 +26,7 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
   participants,
   currentUserId,
   userRole,
+  onChangeAvatar,
 }) => {
   if (!isOpen) return null;
 
@@ -77,13 +77,16 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
               }`}
             >
               <div className="flex items-center gap-2.5 min-w-0">
-                <div
-                  className="w-8 h-8 rounded-xl flex items-center justify-center font-bold text-white shadow-xs shrink-0 relative"
-                  style={{ backgroundColor: p.color || '#3B82F6' }}
-                >
-                  {p.name.charAt(0).toUpperCase()}
+                <div className="relative shrink-0">
+                  <UserAvatar
+                    avatar={p.avatar || (p.role === 'tutor' ? '👨‍🏫' : '🎓')}
+                    name={p.name}
+                    color={p.color || '#3B82F6'}
+                    size="md"
+                    className="shadow-2xs"
+                  />
                   {p.role === 'tutor' && (
-                    <span className="absolute -top-1 -right-1 bg-amber-400 text-amber-950 p-0.5 rounded-full ring-1 ring-white">
+                    <span className="absolute -top-1 -right-1 bg-amber-400 text-amber-950 p-0.5 rounded-full ring-1 ring-white shadow-xs">
                       <Crown className="w-2.5 h-2.5" />
                     </span>
                   )}
@@ -118,14 +121,15 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
               {/* Actions & Mic status */}
               <div className="flex items-center gap-1 shrink-0">
                 {p.micMuted ? (
-                  <div className="p-1.5 bg-rose-50 text-rose-500 rounded-lg">
+                  <div className="p-1.5 bg-rose-50 text-rose-500 rounded-lg" title="Микрофон выключен">
                     <MicOff className="w-3.5 h-3.5" />
                   </div>
                 ) : (
                   <div
                     className={`p-1.5 rounded-lg ${
-                      isSpeaking ? 'bg-emerald-100 text-emerald-600' : 'bg-slate-200/70 text-slate-600'
+                      isSpeaking ? 'bg-emerald-100 text-emerald-600 animate-pulse' : 'bg-slate-200/70 text-slate-600'
                     }`}
+                    title={isSpeaking ? 'Говорит...' : 'Микрофон включен'}
                   >
                     <Mic className="w-3.5 h-3.5" />
                   </div>
@@ -147,8 +151,16 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
         })}
       </div>
 
-      <div className="p-3 border-t border-slate-200 bg-slate-50 text-[11px] text-slate-600">
-        <span>💡 Все участники слышат друг друга и синхронно видят доску в реальном времени.</span>
+      <div className="p-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between text-[11px] text-slate-600">
+        <span>💡 Голосовая связь и доска активны</span>
+        {onChangeAvatar && (
+          <button
+            onClick={onChangeAvatar}
+            className="text-blue-600 hover:text-blue-700 font-semibold underline"
+          >
+            Сменить аватар
+          </button>
+        )}
       </div>
     </aside>
   );

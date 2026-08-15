@@ -1,6 +1,20 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import Prism from 'prismjs';
+import 'prismjs/components/prism-python';
+import 'prismjs/components/prism-javascript';
+import 'prismjs/components/prism-typescript';
+import 'prismjs/components/prism-c';
+import 'prismjs/components/prism-cpp';
+import 'prismjs/components/prism-sql';
+import 'prismjs/components/prism-markup';
+import 'prismjs/components/prism-css';
+import 'prismjs/components/prism-json';
+import 'prismjs/components/prism-bash';
+
 import { getSocket } from '../../services/socket';
 import { CodeFile, CodeCursor } from '../../types/extra';
+import { Participant } from '../../types';
+import { UserAvatar } from '../Common/UserAvatar';
 import {
   Code2,
   Play,
@@ -9,11 +23,12 @@ import {
   Trash2,
   Terminal,
   FileCode,
-  Users,
   Copy,
   Check,
-  Sparkles,
   Layers,
+  FilePlus2,
+  FileText,
+  Sparkles,
 } from 'lucide-react';
 
 interface CodeIDEProps {
@@ -22,6 +37,8 @@ interface CodeIDEProps {
   userName: string;
   userRole: string;
   userColor: string;
+  userAvatar?: string;
+  participants?: Record<string, Participant>;
   onBackToBoard: () => void;
 }
 
@@ -30,19 +47,72 @@ const DEFAULT_FILES: CodeFile[] = [
     id: 'main-py',
     name: 'main.py',
     language: 'python',
-    content: `# Занятие по программированию: Python\n# Код синхронизируется в реальном времени между репетитором и учеником!\n\ndef solve():\n    print("Привет из среды разработки TutorBoard! 🚀")\n    numbers = [5, 2, 9, 1, 7]\n    print(f"Исходный список: {numbers}")\n    print(f"Отсортированный: {sorted(numbers)}")\n    \n    # Пример вычисления факториала\n    def factorial(n):\n        return 1 if n <= 1 else n * factorial(n - 1)\n    \n    print(f"5! = {factorial(5)}")\n\nsolve()\n`,
+    content: `# Занятие по программированию: Python 🐍
+
+def solve():
+    print("Привет из среды разработки TutorBoard! 🚀")
+    numbers = [5, 2, 9, 1, 7, 3, 8]
+    print(f"Исходный список: {numbers}")
+    print(f"Отсортированный: {sorted(numbers)}")
+    
+    # Пример вычисления факториала
+    def factorial(n: int) -> int:
+        return 1 if n <= 1 else n * factorial(n - 1)
+    
+    for i in range(1, 6):
+        print(f"Факториал {i}! = {factorial(i)}")
+
+if __name__ == "__main__":
+    solve()
+`,
   },
   {
     id: 'index-js',
     name: 'solution.js',
     language: 'javascript',
-    content: `// Решение задачи на JavaScript\nfunction binarySearch(arr, target) {\n  let left = 0;\n  let right = arr.length - 1;\n  \n  while (left <= right) {\n    const mid = Math.floor((left + right) / 2);\n    if (arr[mid] === target) return mid;\n    if (arr[mid] < target) left = mid + 1;\n    else right = mid - 1;\n  }\n  return -1;\n}\n\nconst numbers = [1, 3, 5, 7, 9, 11, 15, 20];\nconsole.log("Индекс числа 7:", binarySearch(numbers, 7));\nconsole.log("Индекс числа 12:", binarySearch(numbers, 12));\n`,
+    content: `// Решение алгоритмической задачи на JavaScript ⚡
+function binarySearch(arr, target) {
+  let left = 0;
+  let right = arr.length - 1;
+  
+  while (left <= right) {
+    const mid = Math.floor((left + right) / 2);
+    if (arr[mid] === target) return mid;
+    if (arr[mid] < target) left = mid + 1;
+    else right = mid - 1;
+  }
+  return -1;
+}
+
+const numbers = [1, 3, 5, 7, 9, 11, 15, 20];
+console.log("Исходный массив:", numbers);
+console.log("Поиск числа 7 -> Индекс:", binarySearch(numbers, 7));
+console.log("Поиск числа 12 -> Индекс:", binarySearch(numbers, 12));
+`,
   },
   {
     id: 'sol-cpp',
     name: 'task.cpp',
     language: 'cpp',
-    content: `// C++ Решение алгоритмической задачи\n#include <iostream>\n#include <vector>\n#include <algorithm>\n\nusing namespace std;\n\nint main() {\n    vector<int> a = {4, 1, 8, 3, 9};\n    sort(a.begin(), a.end());\n    \n    cout << "Sorted C++ Array: ";\n    for (int x : a) {\n        cout << x << " ";\n    }\n    cout << endl;\n    return 0;\n}\n`,
+    content: `// C++ Решение задачи 🚀
+#include <iostream>
+#include <vector>
+#include <algorithm>
+
+using namespace std;
+
+int main() {
+    vector<int> a = {4, 1, 8, 3, 9, 2};
+    sort(a.begin(), a.end());
+    
+    cout << "Sorted Array: ";
+    for (int x : a) {
+        cout << x << " ";
+    }
+    cout << endl;
+    return 0;
+}
+`,
   },
 ];
 
@@ -56,12 +126,44 @@ const LANGUAGE_EXTENSIONS: Record<string, string> = {
   sql: 'sql',
 };
 
+const LINE_HEIGHT = 24; // Exact px line-height
+const PADDING_TOP = 12; // Textarea padding-top in px
+const PADDING_LEFT = 12; // Textarea padding-left in px
+
+function getPrismLanguage(lang: string): string {
+  const map: Record<string, string> = {
+    python: 'python',
+    py: 'python',
+    javascript: 'javascript',
+    js: 'javascript',
+    typescript: 'typescript',
+    ts: 'typescript',
+    cpp: 'cpp',
+    c: 'c',
+    html: 'markup',
+    css: 'css',
+    sql: 'sql',
+    json: 'json',
+    bash: 'bash',
+  };
+  return map[lang.toLowerCase()] || 'javascript';
+}
+
+function highlightSyntax(code: string, lang: string): string {
+  const prismLang = getPrismLanguage(lang);
+  const grammar = Prism.languages[prismLang] || Prism.languages.javascript;
+  if (!grammar) return code;
+  return Prism.highlight(code, grammar, prismLang);
+}
+
 export const CodeIDE: React.FC<CodeIDEProps> = ({
   roomId,
   myUserId,
   userName,
   userRole,
   userColor,
+  userAvatar = '🎓',
+  participants = {},
   onBackToBoard,
 }) => {
   const [files, setFiles] = useState<CodeFile[]>(DEFAULT_FILES);
@@ -74,18 +176,57 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
 
+  // Exact character width measurement for cursor placement
+  const [charWidth, setCharWidth] = useState<number>(7.8);
+  const [scrollPos, setScrollPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const preRef = useRef<HTMLPreElement>(null);
+  const charMeasureRef = useRef<HTMLSpanElement>(null);
+
   const activeFile = files.find((f) => f.id === activeFileId) || files[0];
 
-  // Socket listeners for real-time collaborative coding
+  // Measure character width precisely on mount and window resize
+  useEffect(() => {
+    const updateCharWidth = () => {
+      if (charMeasureRef.current) {
+        const width = charMeasureRef.current.getBoundingClientRect().width / 10;
+        if (width > 0) {
+          setCharWidth(width);
+        }
+      }
+    };
+
+    updateCharWidth();
+    window.addEventListener('resize', updateCharWidth);
+    return () => window.removeEventListener('resize', updateCharWidth);
+  }, []);
+
+  // Compute syntax highlighted HTML
+  const highlightedCode = useMemo(() => {
+    if (!activeFile?.content) return '';
+    return highlightSyntax(activeFile.content, activeFile.language);
+  }, [activeFile?.content, activeFile?.language]);
+
+  // Sync scroll between textarea, syntax overlay and line numbers
+  const handleScroll = (e: React.UIEvent<HTMLTextAreaElement>) => {
+    const target = e.currentTarget;
+    setScrollPos({ top: target.scrollTop, left: target.scrollLeft });
+    if (preRef.current) {
+      preRef.current.scrollTop = target.scrollTop;
+      preRef.current.scrollLeft = target.scrollLeft;
+    }
+  };
+
+  // Socket listeners for real-time code changes, file creation/deletion, cursors and terminal output
   useEffect(() => {
     const socket = getSocket();
 
     const handleCodeSync = (data: { fileId: string; content: string; senderId: string }) => {
-      if (data.senderId !== myUserId) {
-        setFiles((prev) =>
-          prev.map((f) => (f.id === data.fileId ? { ...f, content: data.content } : f))
-        );
-      }
+      if (data.senderId === myUserId) return;
+      setFiles((prev) =>
+        prev.map((f) => (f.id === data.fileId ? { ...f, content: data.content } : f))
+      );
     };
 
     const handleFileCreated = (data: { file: CodeFile }) => {
@@ -98,7 +239,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     const handleFileDeleted = (data: { fileId: string }) => {
       setFiles((prev) => {
         const next = prev.filter((f) => f.id !== data.fileId);
-        if (data.fileId === activeFileId && next.length > 0) {
+        if (activeFileId === data.fileId && next.length > 0) {
           setActiveFileId(next[0].id);
         }
         return next;
@@ -106,12 +247,11 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     };
 
     const handleCursorSync = (cursor: CodeCursor) => {
-      if (cursor.userId !== myUserId) {
-        setOtherCursors((prev) => ({
-          ...prev,
-          [cursor.userId]: cursor,
-        }));
-      }
+      if (cursor.userId === myUserId) return;
+      setOtherCursors((prev) => ({
+        ...prev,
+        [cursor.userId]: cursor,
+      }));
     };
 
     const handleOutputSync = (data: { output: string; senderName: string }) => {
@@ -131,9 +271,9 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       socket.off('ide:cursor:sync', handleCursorSync);
       socket.off('ide:output:sync', handleOutputSync);
     };
-  }, [myUserId, activeFileId]);
+  }, [activeFileId, myUserId]);
 
-  // Handle local text editing & broadcast
+  // Broadcast code changes
   const handleContentChange = (newContent: string) => {
     if (!activeFile) return;
 
@@ -141,30 +281,64 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       prev.map((f) => (f.id === activeFile.id ? { ...f, content: newContent } : f))
     );
 
-    const socket = getSocket();
-    socket.emit('ide:code:change', {
+    getSocket().emit('ide:code:change', {
       fileId: activeFile.id,
       content: newContent,
       senderId: myUserId,
     });
   };
 
-  // Broadcast cursor line position
-  const handleTextareaSelect = (e: React.SyntheticEvent<HTMLTextAreaElement>) => {
-    const textarea = e.currentTarget;
-    const pos = textarea.selectionStart;
-    const lines = textarea.value.substr(0, pos).split('\n');
+  // Broadcast local cursor position with line and column
+  const broadcastCursorPosition = () => {
+    if (!textareaRef.current || !activeFile) return;
+    const el = textareaRef.current;
+    const selStart = el.selectionStart;
+    const textBefore = el.value.substring(0, selStart);
+    const lines = textBefore.split('\n');
     const lineNumber = lines.length;
     const column = lines[lines.length - 1].length + 1;
 
-    const socket = getSocket();
-    socket.emit('ide:cursor:move', {
+    getSocket().emit('ide:cursor:move', {
       userId: myUserId,
       userName,
       color: userColor,
+      avatar: userAvatar,
       lineNumber,
       column,
     });
+  };
+
+  // Tab key handling for code indentation
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const el = e.currentTarget;
+      const start = el.selectionStart;
+      const end = el.selectionEnd;
+      const val = el.value;
+
+      if (e.shiftKey) {
+        // Shift+Tab: unindent
+        const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+        const lineText = val.substring(lineStart);
+        if (lineText.startsWith('    ')) {
+          const nextVal = val.substring(0, lineStart) + val.substring(lineStart + 4);
+          handleContentChange(nextVal);
+          setTimeout(() => {
+            el.selectionStart = el.selectionEnd = Math.max(lineStart, start - 4);
+            broadcastCursorPosition();
+          }, 0);
+        }
+      } else {
+        // Tab: insert 4 spaces
+        const nextVal = val.substring(0, start) + '    ' + val.substring(end);
+        handleContentChange(nextVal);
+        setTimeout(() => {
+          el.selectionStart = el.selectionEnd = start + 4;
+          broadcastCursorPosition();
+        }, 0);
+      }
+    }
   };
 
   // Create new file
@@ -173,13 +347,18 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     if (!newFileName.trim()) return;
 
     const ext = LANGUAGE_EXTENSIONS[newFileLang] || 'txt';
-    const finalName = newFileName.includes('.') ? newFileName.trim() : `${newFileName.trim()}.${ext}`;
+    const fullName = newFileName.includes('.') ? newFileName.trim() : `${newFileName.trim()}.${ext}`;
 
     const newFile: CodeFile = {
       id: `file-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
-      name: finalName,
+      name: fullName,
       language: newFileLang,
-      content: `// Файл: ${finalName}\n// Язык: ${newFileLang}\n\n`,
+      content:
+        newFileLang === 'python'
+          ? `# ${fullName}\n\ndef main():\n    print("Hello from ${fullName}!")\n\nif __name__ == "__main__":\n    main()\n`
+          : newFileLang === 'cpp'
+          ? `// ${fullName}\n#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hello from ${fullName}!" << endl;\n    return 0;\n}\n`
+          : `// ${fullName}\nconsole.log("Hello from ${fullName}!");\n`,
     };
 
     setFiles((prev) => [...prev, newFile]);
@@ -197,7 +376,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
 
     setFiles((prev) => {
       const next = prev.filter((f) => f.id !== fileId);
-      if (fileId === activeFileId && next.length > 0) {
+      if (activeFileId === fileId && next.length > 0) {
         setActiveFileId(next[0].id);
       }
       return next;
@@ -207,88 +386,43 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   };
 
   // Change file language
-  const handleChangeLanguage = (lang: string) => {
+  const handleChangeLanguage = (newLang: string) => {
     if (!activeFile) return;
+    const ext = LANGUAGE_EXTENSIONS[newLang] || 'txt';
+    const baseName = activeFile.name.split('.')[0] || 'script';
+    const newName = `${baseName}.${ext}`;
+
     setFiles((prev) =>
-      prev.map((f) => (f.id === activeFile.id ? { ...f, language: lang } : f))
+      prev.map((f) => (f.id === activeFile.id ? { ...f, language: newLang, name: newName } : f))
     );
   };
 
-  // Execute / Run Code
+  // Real backend execution of code via /api/code/run
   const handleRunCode = async () => {
     if (!activeFile) return;
     setIsRunning(true);
-    setOutput('Выполняем компиляцию и запуск кода...\n');
+    setOutput('Запуск программы на сервере...\n');
 
     try {
-      if (activeFile.language === 'javascript' || activeFile.language === 'typescript') {
-        // Safe JavaScript eval with console redirection
-        const logs: string[] = [];
-        const customConsole = {
-          log: (...args: any[]) =>
-            logs.push(args.map((a) => (typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a))).join(' ')),
-          warn: (...args: any[]) => logs.push(`[WARN] ` + args.join(' ')),
-          error: (...args: any[]) => logs.push(`[ERROR] ` + args.join(' ')),
-          info: (...args: any[]) => logs.push(`[INFO] ` + args.join(' ')),
-        };
+      const res = await fetch('/api/code/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: activeFile.content,
+          language: activeFile.language,
+        }),
+      });
 
-        const runFn = new Function('console', activeFile.content);
-        runFn(customConsole);
+      const data = await res.json();
+      const finalOutput = data.output || 'Выполнено без вывода.';
+      setOutput(finalOutput);
 
-        const resOutput = logs.length > 0 ? logs.join('\n') : 'Код успешно выполнен без вывода в консоль.';
-        setOutput(resOutput);
-
-        getSocket().emit('ide:output:sync', {
-          output: resOutput,
-          senderName: userName,
-        });
-      } else if (activeFile.language === 'python') {
-        // Server/Simulated Python runner with rich output
-        setOutput('Запуск интерпретатора Python 3.11...\n');
-        await new Promise((r) => setTimeout(r, 600));
-
-        // Basic client-side simulation + evaluator for standard python constructs
-        let pyOutput = '';
-        const lines = activeFile.content.split('\n');
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (trimmed.startsWith('print(') && trimmed.endsWith(')')) {
-            const inner = trimmed.slice(6, -1);
-            // simple string or math eval
-            try {
-              if (inner.startsWith('f"') || inner.startsWith("f'")) {
-                pyOutput += inner.slice(2, -1) + '\n';
-              } else if (inner.startsWith('"') || inner.startsWith("'")) {
-                pyOutput += inner.slice(1, -1) + '\n';
-              } else {
-                pyOutput += inner + '\n';
-              }
-            } catch {
-              pyOutput += inner + '\n';
-            }
-          }
-        }
-
-        if (!pyOutput) {
-          pyOutput = `[Python 3.11 Execution]\nProgramm finished with exit code 0\nOutput:\nПривет из среды разработки TutorBoard!\nИсходный список: [5, 2, 9, 1, 7]\nОтсортированный: [1, 2, 5, 7, 9]\n5! = 120`;
-        }
-
-        setOutput(pyOutput);
-        getSocket().emit('ide:output:sync', {
-          output: pyOutput,
-          senderName: userName,
-        });
-      } else {
-        // C++ / SQL / Other compilation output
-        const resOutput = `[${activeFile.language.toUpperCase()} Compilation]\ng++ -O3 ${activeFile.name} -o solution\n./solution\n\nSorted C++ Array: 1 3 4 8 9 \n\nProcess finished with exit code 0`;
-        setOutput(resOutput);
-        getSocket().emit('ide:output:sync', {
-          output: resOutput,
-          senderName: userName,
-        });
-      }
+      getSocket().emit('ide:output:sync', {
+        output: finalOutput,
+        senderName: userName,
+      });
     } catch (err: any) {
-      const errOutput = `[ОШИБКА ВЫПОЛНЕНИЯ]:\n${err.message || String(err)}`;
+      const errOutput = `[Ошибка выполнения]:\n${err.message || String(err)}`;
       setOutput(errOutput);
       getSocket().emit('ide:output:sync', {
         output: errOutput,
@@ -299,6 +433,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     }
   };
 
+  // Copy code to clipboard
   const copyCode = () => {
     if (!activeFile) return;
     navigator.clipboard.writeText(activeFile.content);
@@ -306,133 +441,170 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     setTimeout(() => setCopied(false), 2000);
   };
 
-  // Line count for editor line numbering
-  const lineCount = (activeFile?.content.split('\n').length || 1);
+  // Keyboard shortcut Ctrl+Enter to Run
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+        e.preventDefault();
+        handleRunCode();
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [activeFile]);
+
+  // Line count for gutter
+  const lineCount = activeFile?.content.split('\n').length || 1;
 
   return (
-    <div id="tutorboard-ide" className="w-full h-full flex flex-col bg-slate-900 text-slate-100 select-none overflow-hidden">
-      {/* IDE Top Navigation Bar */}
-      <div className="h-12 bg-slate-950 border-b border-slate-800 px-4 flex items-center justify-between gap-3 shrink-0">
-        {/* Left: Return to Whiteboard + Project Info */}
+    <div
+      id="tutorboard-ide"
+      className="w-full h-full flex flex-col bg-slate-950 text-slate-200 select-none overflow-hidden font-sans"
+    >
+      {/* Hidden character width measurement */}
+      <span
+        ref={charMeasureRef}
+        className="font-mono text-[13px] absolute opacity-0 pointer-events-none -z-50"
+        style={{
+          fontFamily:
+            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+        }}
+      >
+        0123456789
+      </span>
+
+      {/* Top Header - Professional & Serious Dark VS Code Theme with Avatars */}
+      <header className="h-11 bg-slate-950 border-b border-slate-800/90 px-3.5 flex items-center justify-between gap-3 shrink-0">
+        {/* Left: Return to Whiteboard + Project Title */}
         <div className="flex items-center gap-3">
           <button
             onClick={onBackToBoard}
-            className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 border border-slate-700 shadow-sm"
+            className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white rounded-lg text-xs font-semibold transition flex items-center gap-1.5 border border-slate-800"
+            title="Вернуться к интерактивной доске"
           >
             <Layers className="w-3.5 h-3.5 text-blue-400" />
-            <span>Вернуться на доску</span>
+            <span>Доска</span>
           </button>
 
-          <div className="h-5 w-px bg-slate-800" />
+          <div className="h-4 w-px bg-slate-800" />
 
           <div className="flex items-center gap-2">
-            <div className="p-1.5 bg-blue-600/20 text-blue-400 rounded-lg">
-              <Code2 className="w-4 h-4" />
-            </div>
-            <span className="text-xs font-bold text-slate-200">
-              Среда разработки (Онлайн IDE)
-            </span>
-            <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-md font-semibold border border-emerald-500/30 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              Синхронизация в реальном времени
-            </span>
+            <Code2 className="w-4 h-4 text-emerald-400" />
+            <span className="text-xs font-bold text-slate-200">Среда разработки</span>
+            <span className="text-[11px] text-slate-500 font-mono">[{roomId}]</span>
           </div>
         </div>
 
-        {/* Middle: Active Collaborator Indicator */}
-        <div className="hidden md:flex items-center gap-2 text-xs text-slate-400 bg-slate-900/90 px-3 py-1 rounded-xl border border-slate-800">
-          <Users className="w-3.5 h-3.5 text-blue-400" />
-          <span>Пишут вместе:</span>
-          <span className="font-semibold text-slate-200">{userName}</span>
+        {/* Center: Collaborators Indicator with Avatars */}
+        <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400">
+          <div className="flex items-center gap-1.5 bg-slate-900/90 px-2.5 py-1 rounded-xl border border-slate-800">
+            <UserAvatar
+              avatar={userAvatar}
+              color={userColor}
+              name={userName}
+              size="xs"
+              className="w-4 h-4 text-[10px]"
+            />
+            <span className="text-slate-200 font-medium">{userName} (Вы)</span>
+          </div>
+
           {(Object.values(otherCursors) as CodeCursor[]).map((c) => (
-            <span
+            <div
               key={c.userId}
-              className="px-2 py-0.5 rounded-md text-[11px] font-bold text-white shadow-2xs"
-              style={{ backgroundColor: c.color }}
+              className="flex items-center gap-1.5 bg-slate-900/90 px-2.5 py-1 rounded-xl border border-slate-800"
             >
-              {c.userName} (стр. {c.lineNumber})
-            </span>
+              <UserAvatar
+                avatar={c.avatar || '🎓'}
+                color={c.color}
+                name={c.userName}
+                size="xs"
+                className="w-4 h-4 text-[10px]"
+              />
+              <span className="text-slate-300 font-medium">
+                {c.userName} <span className="text-slate-500 font-mono">:{c.lineNumber}</span>
+              </span>
+            </div>
           ))}
         </div>
 
-        {/* Right: Language selector + Run Code */}
+        {/* Right: Language Selector + Copy + Run */}
         <div className="flex items-center gap-2">
-          {/* Language selector */}
           <select
             value={activeFile?.language || 'python'}
             onChange={(e) => handleChangeLanguage(e.target.value)}
-            className="bg-slate-800 border border-slate-700 text-xs font-bold text-slate-200 rounded-xl px-2.5 py-1.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+            className="bg-slate-900 border border-slate-800 text-xs font-medium text-slate-200 rounded-lg px-2.5 py-1 focus:outline-none focus:border-slate-700 font-mono cursor-pointer"
           >
-            <option value="python">🐍 Python 3</option>
-            <option value="javascript">⚡ JavaScript (Node.js)</option>
-            <option value="typescript">🔷 TypeScript</option>
-            <option value="cpp">⚙️ C++ (GCC)</option>
-            <option value="html">🌐 HTML / CSS</option>
-            <option value="sql">🗄️ SQL</option>
+            <option value="python">Python 3 (.py)</option>
+            <option value="javascript">JavaScript (.js)</option>
+            <option value="typescript">TypeScript (.ts)</option>
+            <option value="cpp">C++ 20 (.cpp)</option>
+            <option value="html">HTML / CSS</option>
+            <option value="sql">SQL (.sql)</option>
           </select>
 
-          {/* Copy Code */}
           <button
             onClick={copyCode}
-            title="Скопировать код"
-            className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 rounded-xl transition border border-slate-700"
+            title="Скопировать исходный код"
+            className="p-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition border border-slate-800"
           >
-            {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
+            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
 
-          {/* Run Code Button */}
           <button
             onClick={handleRunCode}
             disabled={isRunning}
-            className="px-4 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition flex items-center gap-1.5 shadow-lg shadow-emerald-600/30"
+            title="Запустить код (Ctrl+Enter)"
+            className="px-3.5 py-1 bg-emerald-700 hover:bg-emerald-600 active:bg-emerald-800 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1.5 shadow-sm"
           >
-            <Play className="w-3.5 h-3.5 fill-white" />
-            <span>{isRunning ? 'Запуск...' : 'Запустить (Run)'}</span>
+            <Play className="w-3 h-3 fill-white" />
+            <span>{isRunning ? 'Выполнение...' : 'Запустить'}</span>
           </button>
         </div>
-      </div>
+      </header>
 
-      {/* Main IDE Workspace: Left Sidebar (Files) + Center (Code Editor) + Bottom (Console Output) */}
+      {/* Main IDE Workspace */}
       <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar: File Explorer */}
-        <div className="w-56 bg-slate-950 border-r border-slate-800 flex flex-col shrink-0">
-          <div className="p-3 border-b border-slate-800/80 flex items-center justify-between">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider flex items-center gap-1.5">
-              <FileCode className="w-3.5 h-3.5 text-blue-400" /> Файлы проекта
+        {/* Left Sidebar: File Tree */}
+        <aside className="w-52 bg-slate-950 border-r border-slate-800/90 flex flex-col shrink-0">
+          <div className="h-9 px-3 border-b border-slate-800/80 flex items-center justify-between text-[11px] font-semibold text-slate-400 tracking-wide uppercase">
+            <span className="flex items-center gap-1.5">
+              <FileCode className="w-3.5 h-3.5 text-slate-500" />
+              <span>Файлы проекта</span>
             </span>
             <button
               onClick={() => setShowNewFileModal(true)}
-              title="Создать новый файл"
-              className="p-1 bg-slate-800 hover:bg-blue-600 text-slate-300 hover:text-white rounded-lg transition"
+              title="Создать файл"
+              className="p-1 hover:bg-slate-900 text-slate-400 hover:text-slate-200 rounded transition"
             >
               <Plus className="w-3.5 h-3.5" />
             </button>
           </div>
 
-          {/* File list */}
-          <div className="flex-1 overflow-y-auto p-2 space-y-1">
+          <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5 font-mono text-xs">
             {files.map((file) => {
               const isActive = file.id === activeFileId;
               return (
                 <div
                   key={file.id}
                   onClick={() => setActiveFileId(file.id)}
-                  className={`group px-2.5 py-1.5 rounded-xl text-xs font-medium cursor-pointer flex items-center justify-between transition ${
+                  className={`group px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between transition ${
                     isActive
-                      ? 'bg-blue-600 text-white font-bold shadow-md shadow-blue-600/20'
-                      : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
+                      ? 'bg-slate-800/90 text-white font-semibold shadow-xs'
+                      : 'text-slate-400 hover:bg-slate-900/80 hover:text-slate-200'
                   }`}
                 >
                   <div className="flex items-center gap-2 truncate">
-                    <span className="text-xs">
-                      {file.name.endsWith('.py')
-                        ? '🐍'
-                        : file.name.endsWith('.js') || file.name.endsWith('.ts')
-                        ? '⚡'
-                        : file.name.endsWith('.cpp')
-                        ? '⚙️'
-                        : '📄'}
-                    </span>
+                    <FileText
+                      className={`w-3.5 h-3.5 shrink-0 ${
+                        file.name.endsWith('.py')
+                          ? 'text-amber-400'
+                          : file.name.endsWith('.js') || file.name.endsWith('.ts')
+                          ? 'text-yellow-400'
+                          : file.name.endsWith('.cpp')
+                          ? 'text-blue-400'
+                          : 'text-slate-400'
+                      }`}
+                    />
                     <span className="truncate">{file.name}</span>
                   </div>
 
@@ -450,127 +622,151 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
             })}
           </div>
 
-          {/* Collaborator pointers badge */}
-          <div className="p-3 border-t border-slate-800/80 bg-slate-900/60 text-[11px] text-slate-400">
-            <div className="font-bold text-slate-300 mb-1">Указатели курсора:</div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-1.5">
-                <span className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: userColor }} />
-                <span className="truncate">{userName} (Вы)</span>
-              </div>
-              {(Object.values(otherCursors) as CodeCursor[]).map((c) => (
-                <div key={c.userId} className="flex items-center gap-1.5">
-                  <span className="w-2.5 h-2.5 rounded-full animate-ping" style={{ backgroundColor: c.color }} />
-                  <span className="truncate font-semibold text-slate-200">
-                    {c.userName} (стр. {c.lineNumber})
-                  </span>
-                </div>
-              ))}
-            </div>
+          {/* Quick shortcut info */}
+          <div className="p-2 border-t border-slate-900 text-[10px] text-slate-500 text-center font-mono">
+            Ctrl+Enter — запуск
           </div>
-        </div>
+        </aside>
 
-        {/* Center & Bottom: Code Editor + Terminal Split */}
-        <div className="flex-1 flex flex-col min-w-0 bg-slate-900">
-          {/* Active File Tab & Status */}
-          <div className="h-9 bg-slate-900 border-b border-slate-800 px-4 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2">
-              <span className="font-mono font-bold text-blue-400">{activeFile?.name}</span>
-              <span className="text-slate-500">•</span>
-              <span className="text-slate-400 uppercase text-[10px] tracking-wider font-semibold">
-                {activeFile?.language}
-              </span>
+        {/* Center: Editor + Bottom Console Split */}
+        <main className="flex-1 flex flex-col min-w-0 bg-[#0d1117]">
+          {/* File Tab Bar */}
+          <div className="h-8 bg-slate-950 border-b border-slate-800/80 px-3 flex items-center justify-between text-xs">
+            <div className="flex items-center gap-2 font-mono">
+              <span className="text-slate-200 font-semibold">{activeFile?.name}</span>
+              <span className="text-slate-600">•</span>
+              <span className="text-slate-400 text-[11px]">{activeFile?.language}</span>
             </div>
-            <div className="text-[11px] text-slate-500">
-              Строк: {lineCount} | UTF-8
+            <div className="text-[11px] text-slate-500 font-mono">
+              {lineCount} {lineCount === 1 ? 'строка' : 'строк'}
             </div>
           </div>
 
-          {/* Code Editor Container */}
-          <div className="flex-1 flex overflow-hidden relative">
-            {/* Line numbers gutter */}
-            <div className="w-12 bg-slate-950/60 border-r border-slate-800/60 select-none py-3 text-right pr-3 font-mono text-xs text-slate-600 font-semibold leading-6 overflow-hidden">
-              {Array.from({ length: Math.max(lineCount, 25) }).map((_, i) => (
+          {/* Dual-Layer Synchronized Code Editor with Prism Syntax Highlighting */}
+          <div className="flex-1 flex overflow-hidden relative bg-[#0d1117]">
+            {/* Gutter Line Numbers */}
+            <div
+              className="w-12 bg-[#090d13] border-r border-slate-800/70 select-none py-3 text-right pr-2.5 font-mono text-[13px] text-slate-600 font-medium overflow-hidden shrink-0"
+              style={{ lineHeight: `${LINE_HEIGHT}px` }}
+            >
+              {Array.from({ length: Math.max(lineCount, 30) }).map((_, i) => (
                 <div key={i}>{i + 1}</div>
               ))}
             </div>
 
-            {/* Editor textarea */}
-            <div className="flex-1 relative">
+            {/* Code Editor Container: Syntax Highlighted Layer (Background) + Input Layer (Foreground) */}
+            <div className="flex-1 relative overflow-hidden">
+              {/* Syntax Highlighted Background Layer */}
+              <pre
+                ref={preRef}
+                aria-hidden="true"
+                className="absolute inset-0 m-0 p-3 pointer-events-none font-mono text-[13px] select-none overflow-hidden whitespace-pre"
+                style={{
+                  lineHeight: `${LINE_HEIGHT}px`,
+                  tabSize: 4,
+                  fontFamily:
+                    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                }}
+              >
+                <code
+                  className={`language-${getPrismLanguage(activeFile?.language || 'python')}`}
+                  dangerouslySetInnerHTML={{ __html: highlightedCode + '\n' }}
+                />
+              </pre>
+
+              {/* Transparent Interactive Textarea Layer */}
               <textarea
+                ref={textareaRef}
                 value={activeFile?.content || ''}
                 onChange={(e) => handleContentChange(e.target.value)}
-                onSelect={handleTextareaSelect}
-                onKeyUp={handleTextareaSelect}
-                onClick={handleTextareaSelect}
+                onKeyDown={handleKeyDown}
+                onSelect={broadcastCursorPosition}
+                onKeyUp={broadcastCursorPosition}
+                onClick={broadcastCursorPosition}
+                onScroll={handleScroll}
                 spellCheck={false}
-                placeholder="Пишите код здесь..."
-                className="w-full h-full bg-slate-900 text-slate-100 font-mono text-xs leading-6 p-3 resize-none focus:outline-none select-text border-none"
+                placeholder="// Пишите код здесь..."
+                className="code-editor-textarea absolute inset-0 w-full h-full bg-transparent font-mono text-[13px] p-3 resize-none focus:outline-none border-none whitespace-pre overflow-auto z-10"
                 style={{
-                  tabSize: 2,
+                  tabSize: 4,
+                  lineHeight: `${LINE_HEIGHT}px`,
+                  fontFamily:
+                    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
                 }}
               />
 
-              {/* Visual other cursors indicators */}
-              {(Object.values(otherCursors) as CodeCursor[]).map((c) => (
-                <div
-                  key={c.userId}
-                  className="absolute pointer-events-none transition-all duration-150 flex items-center gap-1"
-                  style={{
-                    top: `${(c.lineNumber - 1) * 24 + 12}px`,
-                    left: `${Math.min(c.column * 7.5 + 48, 600)}px`,
-                  }}
-                >
+              {/* Pixel-Accurate Remote Cursors Overlay with Collaborator Avatars */}
+              {(Object.values(otherCursors) as CodeCursor[]).map((c) => {
+                const topPos = (c.lineNumber - 1) * LINE_HEIGHT + PADDING_TOP - scrollPos.top;
+                const leftPos = (c.column - 1) * charWidth + PADDING_LEFT - scrollPos.left;
+
+                if (topPos < 0 || topPos > 1400 || leftPos < 0 || leftPos > 2600) {
+                  return null;
+                }
+
+                return (
                   <div
-                    className="w-0.5 h-5 animate-pulse"
-                    style={{ backgroundColor: c.color }}
-                  />
-                  <div
-                    className="text-[9px] font-bold text-white px-1 py-0.5 rounded shadow-md leading-none"
-                    style={{ backgroundColor: c.color }}
+                    key={c.userId}
+                    className="absolute pointer-events-none transition-all duration-75 z-20"
+                    style={{
+                      top: `${topPos}px`,
+                      left: `${leftPos}px`,
+                    }}
                   >
-                    {c.userName}
+                    {/* Caret Line */}
+                    <div
+                      className="w-[2px] h-[22px]"
+                      style={{ backgroundColor: c.color }}
+                    />
+                    {/* User Label Flag with Avatar */}
+                    <div
+                      className="absolute -top-4 left-0 text-[10px] font-mono font-semibold text-white px-1.5 py-0.2 rounded-md shadow-md whitespace-nowrap flex items-center gap-1"
+                      style={{ backgroundColor: c.color }}
+                    >
+                      <span className="text-[10px]">{c.avatar || '🎓'}</span>
+                      <span>{c.userName}</span>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           </div>
 
-          {/* Bottom Split: Terminal Output */}
-          <div className="h-48 bg-slate-950 border-t border-slate-800 flex flex-col shrink-0">
-            <div className="px-4 py-2 bg-slate-950 border-b border-slate-800/80 flex items-center justify-between">
-              <div className="flex items-center gap-2 text-xs font-bold text-slate-300">
+          {/* Bottom Split: Terminal Console */}
+          <div className="h-44 bg-[#090d13] border-t border-slate-800 flex flex-col shrink-0 font-mono">
+            <div className="px-3.5 py-1.5 bg-slate-950 border-b border-slate-800/80 flex items-center justify-between text-xs">
+              <div className="flex items-center gap-2 text-slate-300 font-semibold text-[11px]">
                 <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Консоль вывода (Output & Terminal)</span>
+                <span>Терминал / Консоль вывода</span>
               </div>
               <button
                 onClick={() => setOutput('')}
-                title="Очистить консоль"
-                className="text-[11px] text-slate-500 hover:text-slate-300 transition flex items-center gap-1 font-semibold"
+                title="Очистить терминал"
+                className="text-[11px] text-slate-500 hover:text-slate-300 transition flex items-center gap-1 font-medium"
               >
                 <RotateCcw className="w-3 h-3" /> Очистить
               </button>
             </div>
 
-            <div className="flex-1 p-3 font-mono text-xs overflow-y-auto select-text text-emerald-400/90 whitespace-pre-wrap leading-relaxed">
+            <div className="flex-1 p-3 text-[12px] overflow-y-auto select-text text-emerald-400 whitespace-pre-wrap leading-relaxed">
               {output ? (
                 output
               ) : (
                 <span className="text-slate-600">
-                  Нажмите кнопку «Запустить (Run)» сверху, чтобы скомпилировать и выполнить код...
+                  Нажмите «Запустить» или Ctrl+Enter для выполнения программы...
                 </span>
               )}
             </div>
           </div>
-        </div>
+        </main>
       </div>
 
       {/* New File Modal */}
       {showNewFileModal && (
         <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 z-[200]">
-          <div className="bg-slate-900 border border-slate-700 rounded-2xl p-5 max-w-sm w-full shadow-2xl animate-in zoom-in-95">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-5 max-w-sm w-full shadow-2xl animate-in zoom-in-95 font-sans">
             <h3 className="text-sm font-bold text-white mb-3 flex items-center gap-2">
-              <Plus className="w-4 h-4 text-blue-400" /> Создать новый файл
+              <FilePlus2 className="w-4 h-4 text-blue-400" /> Создать новый файл
             </h3>
 
             <form onSubmit={handleCreateFile} className="space-y-3">
@@ -582,8 +778,8 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                   autoFocus
                   value={newFileName}
                   onChange={(e) => setNewFileName(e.target.value)}
-                  placeholder="например: solution, main, test"
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="например: script, algo, task"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono"
                 />
               </div>
 
@@ -592,13 +788,13 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                 <select
                   value={newFileLang}
                   onChange={(e) => setNewFileLang(e.target.value)}
-                  className="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="w-full bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs text-white focus:outline-none focus:border-blue-500 font-mono cursor-pointer"
                 >
                   <option value="python">Python (.py)</option>
                   <option value="javascript">JavaScript (.js)</option>
                   <option value="typescript">TypeScript (.ts)</option>
                   <option value="cpp">C++ (.cpp)</option>
-                  <option value="html">HTML (.html)</option>
+                  <option value="html">HTML / CSS (.html)</option>
                   <option value="sql">SQL (.sql)</option>
                 </select>
               </div>
@@ -607,13 +803,13 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                 <button
                   type="button"
                   onClick={() => setShowNewFileModal(false)}
-                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold rounded-xl text-xs transition"
+                  className="flex-1 py-2 bg-slate-800 hover:bg-slate-700 text-slate-300 font-medium rounded-xl text-xs transition"
                 >
                   Отмена
                 </button>
                 <button
                   type="submit"
-                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-bold rounded-xl text-xs transition"
+                  className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white font-medium rounded-xl text-xs transition shadow-md shadow-blue-600/30"
                 >
                   Создать
                 </button>
@@ -622,6 +818,18 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
           </div>
         </div>
       )}
+      {/* Hidden character width measuring element */}
+      <span
+        ref={charMeasureRef}
+        aria-hidden="true"
+        className="invisible absolute pointer-events-none font-mono text-[13px] whitespace-pre"
+        style={{
+          fontFamily:
+            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+        }}
+      >
+        0123456789
+      </span>
     </div>
   );
 };

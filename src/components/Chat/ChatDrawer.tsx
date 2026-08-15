@@ -1,15 +1,11 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { ChatMessage, UserRole } from '../../types';
+import { UserAvatar } from '../Common/UserAvatar';
 import { getSocket } from '../../services/socket';
 import {
   MessageSquare,
   X,
   Send,
-  Sparkles,
-  Bot,
-  User,
-  GraduationCap,
-  Smile,
 } from 'lucide-react';
 
 interface ChatDrawerProps {
@@ -20,6 +16,7 @@ interface ChatDrawerProps {
   userName: string;
   userRole: UserRole;
   userColor: string;
+  userAvatar?: string;
 }
 
 export const ChatDrawer: React.FC<ChatDrawerProps> = ({
@@ -30,6 +27,7 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
   userName,
   userRole,
   userColor,
+  userAvatar = '🎓',
 }) => {
   const [inputText, setInputText] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -102,37 +100,47 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
             return (
               <div
                 key={msg.id}
-                className={`flex flex-col ${isSelf ? 'items-end' : 'items-start'}`}
+                className={`flex gap-2 ${isSelf ? 'flex-row-reverse' : 'flex-row'} items-start`}
               >
-                <div className="flex items-center gap-1.5 mb-0.5">
-                  <span className="text-[11px] font-bold text-slate-700">
-                    {msg.userName}
-                  </span>
-                  <span
-                    className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
-                      msg.role === 'tutor'
-                        ? 'bg-amber-100 text-amber-800'
-                        : 'bg-blue-100 text-blue-800'
+                {/* User Avatar */}
+                <UserAvatar
+                  avatar={msg.avatar || (msg.role === 'tutor' ? '👨‍🏫' : '🎓')}
+                  name={msg.userName}
+                  size="xs"
+                  className="mt-0.5 shrink-0 shadow-2xs"
+                />
+
+                <div className={`flex flex-col ${isSelf ? 'items-end' : 'items-start'} max-w-[80%]`}>
+                  <div className="flex items-center gap-1.5 mb-0.5">
+                    <span className="text-[11px] font-bold text-slate-700">
+                      {msg.userName} {isSelf && '(Вы)'}
+                    </span>
+                    <span
+                      className={`text-[9px] px-1.5 py-0.2 rounded font-semibold ${
+                        msg.role === 'tutor'
+                          ? 'bg-amber-100 text-amber-800'
+                          : 'bg-blue-100 text-blue-800'
+                      }`}
+                    >
+                      {msg.role === 'tutor' ? 'Репетитор' : 'Ученик'}
+                    </span>
+                    <span className="text-[10px] text-slate-400">
+                      {new Date(msg.timestamp).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                  </div>
+
+                  <div
+                    className={`px-3.5 py-2 rounded-2xl text-xs leading-relaxed ${
+                      isSelf
+                        ? 'bg-blue-600 text-white rounded-tr-none'
+                        : 'bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200'
                     }`}
                   >
-                    {msg.role === 'tutor' ? 'Репетитор' : 'Ученик'}
-                  </span>
-                  <span className="text-[10px] text-slate-600">
-                    {new Date(msg.timestamp).toLocaleTimeString([], {
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
-                  </span>
-                </div>
-
-                <div
-                  className={`px-3.5 py-2 rounded-2xl text-xs max-w-[85%] leading-relaxed ${
-                    isSelf
-                      ? 'bg-blue-600 text-white rounded-tr-none'
-                      : 'bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200'
-                  }`}
-                >
-                  <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                    <p className="whitespace-pre-wrap break-words">{msg.text}</p>
+                  </div>
                 </div>
               </div>
             );
@@ -159,19 +167,19 @@ export const ChatDrawer: React.FC<ChatDrawerProps> = ({
       {/* Input Box */}
       <form
         onSubmit={handleSendMessage}
-        className="p-3 border-t border-slate-200 flex items-center gap-2 bg-white"
+        className="p-3 border-t border-slate-200 bg-white flex items-center gap-2"
       >
         <input
           type="text"
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           placeholder="Напишите сообщение..."
-          className="flex-1 bg-slate-100 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="flex-1 bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-blue-500"
         />
         <button
           type="submit"
           disabled={!inputText.trim()}
-          className="p-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white rounded-xl transition shadow-sm"
+          className="p-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white rounded-xl shadow-md transition"
         >
           <Send className="w-4 h-4" />
         </button>

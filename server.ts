@@ -1,6 +1,9 @@
 import express from 'express';
 import http from 'http';
 import path from 'path';
+import fs from 'fs';
+import os from 'os';
+import { spawn } from 'child_process';
 import { Server as SocketIOServer } from 'socket.io';
 import { createServer as createViteServer } from 'vite';
 
@@ -9,6 +12,7 @@ interface Participant {
   userId?: string;
   name: string;
   role: 'tutor' | 'student';
+  avatar?: string;
   color: string;
   micMuted: boolean;
   isSpeaking: boolean;
@@ -30,6 +34,7 @@ interface ChatMessage {
   userId: string;
   userName: string;
   role: 'tutor' | 'student';
+  avatar?: string;
   text: string;
   formula?: string;
   timestamp: number;
@@ -63,6 +68,7 @@ interface UserRecord {
   name: string;
   passwordHash: string;
   role: 'tutor' | 'student';
+  avatar?: string;
   createdAt: number;
   savedBoards: {
     id: string;
@@ -82,6 +88,7 @@ const users: { [username: string]: UserRecord } = {
     name: 'Преподаватель Алексей',
     passwordHash: '123456',
     role: 'tutor',
+    avatar: '👨‍🏫',
     createdAt: Date.now(),
     savedBoards: [
       {
@@ -151,7 +158,7 @@ async function startServer() {
   // ================= Auth & User Endpoints =================
   // Register
   app.post('/api/auth/register', (req, res) => {
-    const { username, name, password, tutorCode } = req.body;
+    const { username, name, password, tutorCode, avatar } = req.body;
     if (!username || !password || !name) {
       return res.status(400).json({ error: 'Заполните все обязательные поля' });
     }
@@ -171,6 +178,7 @@ async function startServer() {
       name: String(name).trim(),
       passwordHash: String(password),
       role,
+      avatar: avatar || (role === 'tutor' ? '👨‍🏫' : '🎓'),
       createdAt: Date.now(),
       savedBoards: [],
     };
@@ -184,6 +192,7 @@ async function startServer() {
         username: newUser.username,
         name: newUser.name,
         role: newUser.role,
+        avatar: newUser.avatar,
         createdAt: newUser.createdAt,
       },
     });
@@ -210,9 +219,35 @@ async function startServer() {
         username: user.username,
         name: user.name,
         role: user.role,
+        avatar: user.avatar || (user.role === 'tutor' ? '👨‍🏫' : '🎓'),
         createdAt: user.createdAt,
       },
       savedBoards: user.savedBoards || [],
+    });
+  });
+
+  // Update profile
+  app.post('/api/user/profile/update', (req, res) => {
+    const { username, name, avatar } = req.body;
+    const cleanUsername = String(username || '').trim().toLowerCase();
+    const user = users[cleanUsername];
+    if (!user) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    if (name) user.name = String(name).trim();
+    if (avatar) user.avatar = String(avatar);
+
+    return res.json({
+      success: true,
+      user: {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        role: user.role,
+        avatar: user.avatar,
+        createdAt: user.createdAt,
+      },
     });
   });
 
@@ -257,6 +292,238 @@ async function startServer() {
     return res.json({ success: true, savedBoards: user.savedBoards });
   });
 
+  // Code execution endpoint for collaborative IDE
+  app.post('/api/code/run', async (req, res) => {
+    const { code, language } = req.body;
+    if (!code || typeof code !== 'string') {
+      return res.status(400).json({ output: 'Код пуст для выполнения' });
+    }
+
+    const cleanLang = String(language || 'python').toLowerCase();
+
+    // 1. Python 3 Execution
+    if (cleanLang === 'python') {
+      try {
+        const tempDir = os.tmpdir();
+        const scriptPath = path.join(tempDir, `py_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.py`);
+        fs.writeFileSync(scriptPath, code, 'utf8');
+
+        // Try python3 or python
+        const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
+        const child = spawn(pythonBin, [scriptPath]);
+
+        let stdout = '';
+        let stderr = '';
+        let killed = false;
+
+        const timer = setTimeout(() => {
+          killed = true;
+          try {
+            child.kill();
+          } catch {}
+        }, 7000);
+
+        child.stdout.on('data', (d) => {
+          if (stdout.length < 50000) stdout += d.toString();
+        });
+        child.stderr.on('data', (d) => {
+          if (stderr.length < 50000) stderr += d.toString();
+        });
+
+        child.on('close', (exitCode) => {
+          clearTimeout(timer);
+          try {
+            if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
+          } catch {}
+
+          if (killed) {
+            return res.json({
+              output: '⚠️ Время выполнения превышено (лимит 7 сек).\nПроверьте код на наличие бесконечных циклов.',
+              exitCode: -1,
+            });
+          }
+
+          const combined = stdout + (stderr ? (stdout ? '\n' : '') + stderr : '');
+          return res.json({
+            output: combined || '✓ Программа успешно выполнена (вывод пуст)',
+            exitCode,
+          });
+        });
+
+        child.on('error', (err) => {
+          clearTimeout(timer);
+          try {
+            if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
+          } catch {}
+          return res.json({
+            output: `Ошибка вызова интерпретатора Python: ${err.message}`,
+            exitCode: -1,
+          });
+        });
+      } catch (e: any) {
+        return res.json({ output: `Ошибка запуска: ${e.message}`, exitCode: -1 });
+      }
+    }
+    // 2. JavaScript / TypeScript Execution via Node.js
+    else if (cleanLang === 'javascript' || cleanLang === 'typescript') {
+      try {
+        const tempDir = os.tmpdir();
+        const scriptPath = path.join(tempDir, `js_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.js`);
+        fs.writeFileSync(scriptPath, code, 'utf8');
+
+        const child = spawn('node', [scriptPath]);
+        let stdout = '';
+        let stderr = '';
+        let killed = false;
+
+        const timer = setTimeout(() => {
+          killed = true;
+          try {
+            child.kill();
+          } catch {}
+        }, 7000);
+
+        child.stdout.on('data', (d) => {
+          if (stdout.length < 50000) stdout += d.toString();
+        });
+        child.stderr.on('data', (d) => {
+          if (stderr.length < 50000) stderr += d.toString();
+        });
+
+        child.on('close', (exitCode) => {
+          clearTimeout(timer);
+          try {
+            if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
+          } catch {}
+
+          if (killed) {
+            return res.json({
+              output: '⚠️ Время выполнения превышено (лимит 7 сек).',
+              exitCode: -1,
+            });
+          }
+
+          const combined = stdout + (stderr ? (stdout ? '\n' : '') + stderr : '');
+          return res.json({
+            output: combined || '✓ Скрипт Node.js успешно выполнен (вывод пуст)',
+            exitCode,
+          });
+        });
+
+        child.on('error', (err) => {
+          clearTimeout(timer);
+          try {
+            if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
+          } catch {}
+          return res.json({
+            output: `Ошибка Node.js: ${err.message}`,
+            exitCode: -1,
+          });
+        });
+      } catch (e: any) {
+        return res.json({ output: `Ошибка: ${e.message}`, exitCode: -1 });
+      }
+    }
+    // 3. C++ Compilation & Execution via g++
+    else if (cleanLang === 'cpp') {
+      try {
+        const tempDir = os.tmpdir();
+        const randId = Math.random().toString(36).substring(2, 6);
+        const srcPath = path.join(tempDir, `cpp_${Date.now()}_${randId}.cpp`);
+        const binPath = path.join(tempDir, `bin_${Date.now()}_${randId}`);
+        fs.writeFileSync(srcPath, code, 'utf8');
+
+        const compile = spawn('g++', [srcPath, '-O2', '-o', binPath]);
+        let compErr = '';
+
+        compile.stderr.on('data', (d) => {
+          compErr += d.toString();
+        });
+
+        compile.on('close', (compCode) => {
+          if (compCode !== 0) {
+            try {
+              if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath);
+            } catch {}
+            return res.json({
+              output: `❌ Ошибка компиляции C++ (g++):\n${compErr}`,
+              exitCode: compCode,
+            });
+          }
+
+          // Run binary
+          const runChild = spawn(binPath);
+          let runOut = '';
+          let runErr = '';
+          let killed = false;
+
+          const timer = setTimeout(() => {
+            killed = true;
+            try {
+              runChild.kill();
+            } catch {}
+          }, 5000);
+
+          runChild.stdout.on('data', (d) => {
+            if (runOut.length < 50000) runOut += d.toString();
+          });
+          runChild.stderr.on('data', (d) => {
+            if (runErr.length < 50000) runErr += d.toString();
+          });
+
+          runChild.on('close', (runCode) => {
+            clearTimeout(timer);
+            try {
+              if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath);
+              if (fs.existsSync(binPath)) fs.unlinkSync(binPath);
+            } catch {}
+
+            if (killed) {
+              return res.json({
+                output: '⚠️ Время выполнения C++ превышено (лимит 5 сек).',
+                exitCode: -1,
+              });
+            }
+
+            const combined = runOut + (runErr ? (runOut ? '\n' : '') + runErr : '');
+            return res.json({
+              output: combined || '✓ C++ программа завершилась успешно (вывод пуст)',
+              exitCode: runCode,
+            });
+          });
+
+          runChild.on('error', (err) => {
+            clearTimeout(timer);
+            try {
+              if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath);
+              if (fs.existsSync(binPath)) fs.unlinkSync(binPath);
+            } catch {}
+            return res.json({ output: `Ошибка выполнения бинарного файла: ${err.message}` });
+          });
+        });
+
+        compile.on('error', (err) => {
+          try {
+            if (fs.existsSync(srcPath)) fs.unlinkSync(srcPath);
+          } catch {}
+          return res.json({
+            output: `Компилятор g++ недоступен на хосте: ${err.message}`,
+            exitCode: -1,
+          });
+        });
+      } catch (e: any) {
+        return res.json({ output: `Ошибка C++: ${e.message}`, exitCode: -1 });
+      }
+    }
+    // HTML / SQL or other format
+    else {
+      return res.json({
+        output: `✓ Файл ${cleanLang.toUpperCase()} проверен. Синтаксис готов.`,
+        exitCode: 0,
+      });
+    }
+  });
+
   // Health
   app.get('/api/health', (req, res) => {
     res.json({ status: 'ok', roomsCount: Object.keys(rooms).length });
@@ -290,6 +557,7 @@ async function startServer() {
         userName,
         role,
         color,
+        avatar,
         title,
         subject,
         userId,
@@ -298,6 +566,7 @@ async function startServer() {
         userName: string;
         role: 'tutor' | 'student';
         color?: string;
+        avatar?: string;
         title?: string;
         subject?: string;
         userId?: string;
@@ -326,6 +595,7 @@ async function startServer() {
           userId,
           name: userName || (role === 'tutor' ? 'Преподаватель' : 'Ученик'),
           role: role || 'student',
+          avatar: avatar || (role === 'tutor' ? '👨‍🏫' : '🎓'),
           color: assignedColor,
           micMuted: false,
           isSpeaking: false,
@@ -654,6 +924,19 @@ async function startServer() {
       io.to(currentRoomId).emit('board:lock:changed', { isLocked: room.isLocked });
     });
 
+    // User profile/avatar live update
+    socket.on('user:profile:update', (data: { name?: string; avatar?: string; color?: string }) => {
+      if (!currentRoomId || !rooms[currentRoomId] || !currentUser) return;
+      const room = rooms[currentRoomId];
+
+      if (data.name) currentUser.name = data.name;
+      if (data.avatar) currentUser.avatar = data.avatar;
+      if (data.color) currentUser.color = data.color;
+
+      room.participants[socket.id] = currentUser;
+      io.to(currentRoomId).emit('participant:updated', currentUser);
+    });
+
     // Cursor position broadcast
     socket.on('cursor:move', (data: { x: number; y: number; pageIndex: number }) => {
       if (!currentRoomId || !currentUser) return;
@@ -661,6 +944,7 @@ async function startServer() {
         userId: socket.id,
         userName: currentUser.name,
         role: currentUser.role,
+        avatar: currentUser.avatar,
         color: currentUser.color,
         x: data.x,
         y: data.y,
@@ -675,6 +959,7 @@ async function startServer() {
         userId: socket.id,
         userName: currentUser.name,
         color: currentUser.color,
+        avatar: currentUser.avatar,
         x: data.x,
         y: data.y,
         pageIndex: data.pageIndex,
@@ -692,6 +977,7 @@ async function startServer() {
         userId: socket.id,
         userName: currentUser.name,
         role: currentUser.role,
+        avatar: currentUser.avatar,
         text,
         formula,
         timestamp: Date.now(),

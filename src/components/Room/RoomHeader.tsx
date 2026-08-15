@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { UserRole, Participant } from '../../types';
+import { UserAvatar } from '../Common/UserAvatar';
 import { getSocket } from '../../services/socket';
 import confetti from 'canvas-confetti';
 import {
@@ -29,6 +30,8 @@ interface RoomHeaderProps {
   subject: string;
   userRole: UserRole;
   userName: string;
+  userColor?: string;
+  userAvatar?: string;
   isLocked: boolean;
   participants: Record<string, Participant>;
   unreadChatCount: number;
@@ -37,6 +40,7 @@ interface RoomHeaderProps {
   onLeaveRoom: () => void;
   onOpenSettings: () => void;
   onOpenIDE: () => void;
+  onOpenAvatarPicker?: () => void;
 }
 
 export const RoomHeader: React.FC<RoomHeaderProps> = ({
@@ -45,6 +49,8 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   subject,
   userRole,
   userName,
+  userColor = '#2563EB',
+  userAvatar = '🎓',
   isLocked,
   participants,
   unreadChatCount,
@@ -53,6 +59,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   onLeaveRoom,
   onOpenSettings,
   onOpenIDE,
+  onOpenAvatarPicker,
 }) => {
   const [copiedCode, setCopiedCode] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
@@ -367,6 +374,23 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
             </span>
           )}
         </button>
+
+        {/* User Profile Avatar with Click-to-Change */}
+        {onOpenAvatarPicker && (
+          <button
+            onClick={onOpenAvatarPicker}
+            title={`${userName} (Нажмите, чтобы сменить аватарку)`}
+            className="flex items-center gap-1.5 p-1 hover:bg-slate-100 rounded-xl transition border border-transparent hover:border-slate-200"
+          >
+            <UserAvatar
+              avatar={userAvatar}
+              name={userName}
+              color={userColor}
+              size="sm"
+              className="shadow-2xs hover:scale-105 transition"
+            />
+          </button>
+        )}
 
         {/* Leave room */}
         <button

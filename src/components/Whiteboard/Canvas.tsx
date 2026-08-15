@@ -973,10 +973,11 @@ export const Canvas: React.FC<CanvasProps> = ({
               <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87a.5.5 0 0 0 .35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z" />
             </svg>
             <span
-              className="px-2 py-0.5 rounded text-[11px] font-semibold text-white shadow-sm whitespace-nowrap"
+              className="px-2 py-0.5 rounded-lg text-[11px] font-semibold text-white shadow-md whitespace-nowrap flex items-center gap-1"
               style={{ backgroundColor: cur.color || '#3B82F6' }}
             >
-              {cur.userName} {cur.role === 'tutor' ? '👨‍🏫' : '👨‍🎓'}
+              <span>{cur.avatar || (cur.role === 'tutor' ? '👨‍🏫' : '🎓')}</span>
+              <span>{cur.userName}</span>
             </span>
           </div>
         );

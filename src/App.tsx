@@ -24,9 +24,11 @@ import { ParticipantsDrawer } from './components/Room/ParticipantsDrawer';
 import { MathToolbar } from './components/MathToolbar';
 import { SettingsModal } from './components/Room/SettingsModal';
 import { CodeIDE } from './components/IDE/CodeIDE';
+import { AvatarPicker } from './components/Common/AvatarPicker';
 import confetti from 'canvas-confetti';
 
 const KEYBINDS_STORAGE_KEY = 'tutorboard_keybinds';
+const STORAGE_KEY = 'tutorboard_user_session';
 
 export default function App() {
   // Session & User State
@@ -37,7 +39,9 @@ export default function App() {
   const [userRole, setUserRole] = useState<UserRole>('student');
   const [userName, setUserName] = useState('');
   const [userColor, setUserColor] = useState('#2563EB');
+  const [userAvatar, setUserAvatar] = useState('🎓');
   const [myUserId, setMyUserId] = useState('');
+  const [showAvatarPicker, setShowAvatarPicker] = useState(false);
 
   // Mode View (Whiteboard vs Collaborative IDE)
   const [activeView, setActiveView] = useState<'board' | 'ide'>('board');
@@ -112,7 +116,7 @@ export default function App() {
     [activePageIndex]
   );
 
-  // Undo / Redo handlers with stable batch sync (Fixes the disappearing/flickering bug)
+  // Undo / Redo handlers with stable batch sync
   const handleUndo = useCallback(() => {
     setUndoStack((prevUndo) => {
       const pageUndo = prevUndo[activePageIndex] || [];
@@ -135,7 +139,6 @@ export default function App() {
         [activePageIndex]: previousState,
       }));
 
-      // Direct clean sync: replace entire page atomically
       const socket = getSocket();
       socket.emit('board:elements:replace', {
         pageIndex: activePageIndex,
@@ -190,6 +193,7 @@ export default function App() {
     userName: targetName,
     role: targetRole,
     color: targetColor,
+    avatar: targetAvatar,
     title: targetTitle,
     subject: targetSubject,
   }: {
@@ -197,6 +201,7 @@ export default function App() {
     userName: string;
     role: UserRole;
     color: string;
+    avatar?: string;
     title?: string;
     subject?: string;
   }) => {
@@ -205,21 +210,48 @@ export default function App() {
       socket.connect();
     }
 
+    const av = targetAvatar || (targetRole === 'tutor' ? '👨‍🏫' : '🎓');
     setRoomId(targetRoomId);
     setUserName(targetName);
     setUserRole(targetRole);
     setUserColor(targetColor);
+    setUserAvatar(av);
 
     socket.emit('room:join', {
       roomId: targetRoomId,
       userName: targetName,
       role: targetRole,
       color: targetColor,
+      avatar: av,
       title: targetTitle,
       subject: targetSubject,
     });
 
     setIsInRoom(true);
+  };
+
+  // Live avatar selection
+  const handleAvatarChange = (avatar: string, newColor?: string) => {
+    setUserAvatar(avatar);
+    if (newColor) setUserColor(newColor);
+
+    const socket = getSocket();
+    socket.emit('user:profile:update', {
+      avatar,
+      color: newColor || userColor,
+    });
+
+    // Update stored session if present
+    try {
+      const stored = localStorage.getItem(STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed.user) {
+          parsed.user.avatar = avatar;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+        }
+      }
+    } catch {}
   };
 
   // Socket event listeners
@@ -270,6 +302,20 @@ export default function App() {
         const next = { ...prev };
         delete next[userId];
         return next;
+      });
+    });
+
+    socket.on('participant:profile:updated', ({ userId, avatar, color }: { userId: string; avatar: string; color?: string }) => {
+      setParticipants((prev) => {
+        if (!prev[userId]) return prev;
+        return {
+          ...prev,
+          [userId]: {
+            ...prev[userId],
+            avatar,
+            color: color || prev[userId].color,
+          },
+        };
       });
     });
 
@@ -426,6 +472,7 @@ export default function App() {
       socket.off('room:state');
       socket.off('participant:joined');
       socket.off('participant:left');
+      socket.off('participant:profile:updated');
       socket.off('board:element:created');
       socket.off('board:element:updated');
       socket.off('board:element:deleted');
@@ -450,102 +497,100 @@ export default function App() {
     const timer = setInterval(() => {
       const now = Date.now();
       setLaserPoints((prev) => prev.filter((p) => now - p.timestamp < 1500));
-    }, 500);
+    }, 200);
     return () => clearInterval(timer);
   }, []);
 
   const showToast = (text: string) => {
     setNotificationToast(text);
-    setTimeout(() => setNotificationToast(null), 3500);
+    setTimeout(() => setNotificationToast(null), 4000);
   };
 
-  const handlePageChange = (index: number) => {
-    setActivePageIndex(index);
-    getSocket().emit('board:page:change', { pageIndex: index });
+  const handlePageChange = (idx: number) => {
+    if (idx >= 0 && idx < totalPages) {
+      setActivePageIndex(idx);
+      getSocket().emit('board:page:change', { pageIndex: idx });
+    }
   };
 
   const handleAddPage = () => {
     getSocket().emit('board:page:add');
   };
 
-  const handleClearPage = () => {
-    if (window.confirm('Очистить все рисунки на текущей странице?')) {
-      setCurrentElements([]);
-      getSocket().emit('board:clear', { pageIndex: activePageIndex });
-    }
-  };
+  const handleClearPage = useCallback(() => {
+    setCurrentElements([]);
+    getSocket().emit('board:clear', { pageIndex: activePageIndex });
+  }, [activePageIndex, setCurrentElements]);
 
-  const handleImageUploaded = (imgEl: ImageElement) => {
-    setCurrentElements((prev) => [...prev, imgEl]);
-    getSocket().emit('board:element:create', { element: imgEl, pageIndex: activePageIndex });
-  };
-
-  const handleExportPNG = () => {
-    const canvas = document.querySelector('canvas');
-    if (!canvas) return;
-    const link = document.createElement('a');
-    link.download = `TutorBoard-${roomId}-стр${activePageIndex + 1}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
+  const handleImageUploaded = (imgElem: ImageElement) => {
+    setCurrentElements((prev) => [...prev, imgElem]);
+    getSocket().emit('board:element:create', {
+      element: imgElem,
+      pageIndex: activePageIndex,
+    });
   };
 
   const handleLeaveRoom = () => {
-    if (window.confirm('Выйти из занятия?')) {
-      voiceManager.cleanup();
-      disconnectSocket();
-      setIsInRoom(false);
-      setPages({ 0: [] });
-      setParticipants({});
-      setChatMessages([]);
-    }
+    disconnectSocket();
+    voiceManager.leave();
+    setIsInRoom(false);
+    setParticipants({});
+    setCursors({});
+    setPages({ 0: [] });
+    setChatMessages([]);
   };
 
   const handleSaveKeybinds = (newKeybinds: KeybindSettings) => {
     setKeybinds(newKeybinds);
-    try {
-      localStorage.setItem(KEYBINDS_STORAGE_KEY, JSON.stringify(newKeybinds));
-      showToast('Горячие клавиши сохранены!');
-    } catch {}
+    localStorage.setItem(KEYBINDS_STORAGE_KEY, JSON.stringify(newKeybinds));
   };
 
-  // Keyboard shortcuts & keybind dispatch
+  // Export board as PNG
+  const handleExportPNG = () => {
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+    if (!canvas) return;
+    const link = document.createElement('a');
+    link.download = `${roomTitle || 'tutorboard'}-page-${activePageIndex + 1}.png`;
+    link.href = canvas.toDataURL('image/png');
+    link.click();
+  };
+
+  // Global Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).tagName === 'INPUT' || (e.target as HTMLElement).tagName === 'TEXTAREA') {
+      const activeEl = document.activeElement?.tagName?.toLowerCase();
+      if (activeEl === 'input' || activeEl === 'textarea' || activeEl === 'select') {
         return;
       }
 
-      // Undo / Redo
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      const key = e.key.toLowerCase();
+      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
+
+      if (isCtrlOrCmd && key === 'z' && !e.shiftKey) {
         e.preventDefault();
-        if (e.shiftKey) {
-          handleRedo();
-        } else {
-          handleUndo();
-        }
+        handleUndo();
         return;
       }
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+
+      if (isCtrlOrCmd && (key === 'y' || (key === 'z' && e.shiftKey))) {
         e.preventDefault();
         handleRedo();
         return;
       }
 
-      const pressedKey = e.key.toLowerCase();
-
-      // Tool keybind mappings
-      if (pressedKey === keybinds.select) setTool('select');
-      else if (pressedKey === keybinds.pan) setTool('pan');
-      else if (pressedKey === keybinds.pen) setTool('pen');
-      else if (pressedKey === keybinds.highlighter) setTool('highlighter');
-      else if (pressedKey === keybinds.eraser) setTool('eraser');
-      else if (pressedKey === keybinds.line) setTool('line');
-      else if (pressedKey === keybinds.rect) setTool('rect');
-      else if (pressedKey === keybinds.circle) setTool('circle');
-      else if (pressedKey === keybinds.triangle) setTool('triangle');
-      else if (pressedKey === keybinds.text) setTool('text');
-      else if (pressedKey === keybinds.laser) setTool('laser');
-      else if (pressedKey === keybinds.clear) handleClearPage();
+      if (key === keybinds.pen) setTool('pen');
+      else if (key === keybinds.eraser) setTool('eraser');
+      else if (key === keybinds.highlighter) setTool('highlighter');
+      else if (key === keybinds.laser) setTool('laser');
+      else if (key === keybinds.select) setTool('select');
+      else if (key === keybinds.pan) setTool('pan');
+      else if (key === keybinds.text) setTool('text');
+      else if (key === keybinds.rectangle) setTool('rectangle');
+      else if (key === keybinds.circle) setTool('circle');
+      else if (key === keybinds.line) setTool('line');
+      else if (key === keybinds.arrow) setTool('arrow');
+      else if (key === keybinds.triangle) setTool('triangle');
+      else if (key === keybinds.clear) handleClearPage();
     };
 
     window.addEventListener('keydown', handleKeyDown);
@@ -572,6 +617,8 @@ export default function App() {
         subject={subject}
         userRole={userRole}
         userName={userName}
+        userColor={userColor}
+        userAvatar={userAvatar}
         isLocked={isLocked}
         participants={participants}
         unreadChatCount={unreadChatCount}
@@ -583,6 +630,7 @@ export default function App() {
         onLeaveRoom={handleLeaveRoom}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenIDE={() => setActiveView(activeView === 'ide' ? 'board' : 'ide')}
+        onOpenAvatarPicker={() => setShowAvatarPicker(true)}
       />
 
       {/* Main Workspace Area (Whiteboard OR Collaborative IDE) */}
@@ -594,6 +642,8 @@ export default function App() {
             userName={userName}
             userRole={userRole}
             userColor={userColor}
+            userAvatar={userAvatar}
+            participants={participants}
             onBackToBoard={() => setActiveView('board')}
           />
         ) : (
@@ -696,6 +746,7 @@ export default function App() {
           userName={userName}
           userRole={userRole}
           userColor={userColor}
+          userAvatar={userAvatar}
         />
 
         {/* Lesson Participants Drawer */}
@@ -705,6 +756,7 @@ export default function App() {
           participants={participants}
           currentUserId={myUserId}
           userRole={userRole}
+          onChangeAvatar={() => setShowAvatarPicker(true)}
         />
 
         {/* Settings Modal (Keybinds) */}
@@ -713,6 +765,16 @@ export default function App() {
           onClose={() => setIsSettingsOpen(false)}
           keybinds={keybinds}
           onSaveKeybinds={handleSaveKeybinds}
+        />
+
+        {/* Avatar Picker Modal */}
+        <AvatarPicker
+          isOpen={showAvatarPicker}
+          onClose={() => setShowAvatarPicker(false)}
+          selectedAvatar={userAvatar}
+          selectedColor={userColor}
+          userName={userName}
+          onSelectAvatar={handleAvatarChange}
         />
       </div>
     </div>
