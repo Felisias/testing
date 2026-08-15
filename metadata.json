@@ -1,0 +1,10 @@
+{
+  "name": "TutorBoard - Онлайн Репетиторство",
+  "description": "Интерактивная доска для репетиторов и учеников со встроенной голосовой связью, совместным рисованием в реальном времени и входом по коду комнаты.",
+  "requestFramePermissions": [
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
