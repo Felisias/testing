@@ -1,10 +1,12 @@
 import { getSocket } from './socket';
 
+const STORAGE_MIC_KEY = 'webrtc_selected_mic';
+const STORAGE_SPEAKER_KEY = 'webrtc_selected_speaker';
+
 interface PeerConnectionState {
   peerId: string;
   connection: RTCPeerConnection;
   audioElement?: HTMLAudioElement;
-  audioSourceNode?: MediaStreamAudioSourceNode;
   pendingCandidates: RTCIceCandidateInit[];
   makingOffer: boolean;
   ignoreOffer: boolean;
@@ -51,6 +53,13 @@ export class VoiceManager {
   };
 
   constructor() {
+    try {
+      const savedMic = localStorage.getItem(STORAGE_MIC_KEY);
+      if (savedMic) this.selectedInputDeviceId = savedMic;
+      const savedSpeaker = localStorage.getItem(STORAGE_SPEAKER_KEY);
+      if (savedSpeaker) this.selectedOutputDeviceId = savedSpeaker;
+    } catch {}
+
     this.setupSocketListeners();
     this.setupUserGestureUnlock();
   }
@@ -86,7 +95,7 @@ export class VoiceManager {
     return this.audioContext;
   }
 
-  // Auto unlock browser audio on any user gesture (clicks, keyboard, touch)
+  // Auto unlock browser audio playback on user gestures
   private setupUserGestureUnlock() {
     const unlock = () => {
       const ctx = this.audioContext;
@@ -224,8 +233,6 @@ export class VoiceManager {
       if (!Array.isArray(list)) return;
       list.forEach((p) => {
         if (p && p.id && p.id !== myId && !this.peerConnections.has(p.id)) {
-          // If myId < p.id, initiate offer, otherwise let the other side initiate
-          // or participant:joined will ensure both connect
           if (myId && p.id > myId) {
             this.callPeer(p.id);
           }
@@ -283,6 +290,10 @@ export class VoiceManager {
   public async setAudioInputDevice(deviceId: string): Promise<boolean> {
     this.selectedInputDeviceId = deviceId;
     try {
+      localStorage.setItem(STORAGE_MIC_KEY, deviceId);
+    } catch {}
+
+    try {
       const constraints: MediaStreamConstraints = {
         audio: {
           deviceId: deviceId === 'default' ? undefined : { exact: deviceId },
@@ -332,16 +343,22 @@ export class VoiceManager {
 
   public async setAudioOutputDevice(deviceId: string): Promise<boolean> {
     this.selectedOutputDeviceId = deviceId;
+    try {
+      localStorage.setItem(STORAGE_SPEAKER_KEY, deviceId);
+    } catch {}
+
     let success = true;
 
-    this.peerConnections.forEach((peer) => {
+    for (const peer of this.peerConnections.values()) {
       if (peer.audioElement && typeof (peer.audioElement as any).setSinkId === 'function') {
-        (peer.audioElement as any).setSinkId(deviceId).catch((err: any) => {
+        try {
+          await (peer.audioElement as any).setSinkId(deviceId === 'default' ? '' : deviceId);
+        } catch (err: any) {
           console.warn('setSinkId error:', err);
           success = false;
-        });
+        }
       }
-    });
+    }
 
     return success;
   }
@@ -353,6 +370,7 @@ export class VoiceManager {
       this.localAnalyser = ctx.createAnalyser();
       this.localAnalyser.fftSize = 256;
       this.localAnalyser.smoothingTimeConstant = 0.4;
+      // Connect to analyser only (NOT to ctx.destination, preventing local speaker loopback)
       source.connect(this.localAnalyser);
 
       if (!this.animationFrameId) {
@@ -533,7 +551,7 @@ export class VoiceManager {
       }
     };
 
-    // Remote Audio Stream
+    // Remote Audio Stream (outputs EXCLUSIVELY to HTMLAudioElement with setSinkId)
     connection.ontrack = (event) => {
       const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
       let audioEl = peer.audioElement;
@@ -545,38 +563,37 @@ export class VoiceManager {
         audioEl.setAttribute('playsinline', 'true');
         audioEl.setAttribute('data-peer-id', peerId);
 
-        // Apply selected speaker if available
-        if (this.selectedOutputDeviceId !== 'default' && typeof (audioEl as any).setSinkId === 'function') {
-          (audioEl as any).setSinkId(this.selectedOutputDeviceId).catch(() => {});
+        // Apply selected speaker / headphones device if specified
+        if (
+          this.selectedOutputDeviceId &&
+          this.selectedOutputDeviceId !== 'default' &&
+          typeof (audioEl as any).setSinkId === 'function'
+        ) {
+          (audioEl as any).setSinkId(this.selectedOutputDeviceId).catch((err: any) => {
+            console.warn('setSinkId initial error:', err);
+          });
         }
 
         const container = this.getOrCreateAudioContainer();
         container.appendChild(audioEl);
         peer.audioElement = audioEl;
+      } else {
+        if (
+          this.selectedOutputDeviceId &&
+          this.selectedOutputDeviceId !== 'default' &&
+          typeof (audioEl as any).setSinkId === 'function'
+        ) {
+          (audioEl as any).setSinkId(this.selectedOutputDeviceId).catch(() => {});
+        }
       }
 
       audioEl.srcObject = stream;
       audioEl.volume = 1.0;
       audioEl.muted = this.isDeafened;
 
-      // Also route through Web Audio destination for guaranteed playback
-      try {
-        const ctx = this.getAudioContext();
-        if (!peer.audioSourceNode) {
-          const source = ctx.createMediaStreamSource(stream);
-          source.connect(ctx.destination);
-          peer.audioSourceNode = source;
-        }
-      } catch (e) {
-        // Fallback to HTMLAudioElement
-      }
-
       const playAudio = () => {
         if (audioEl && !this.isDeafened) {
           audioEl.play().catch(() => {});
-        }
-        if (this.audioContext && this.audioContext.state === 'suspended') {
-          this.audioContext.resume().catch(() => {});
         }
       };
 
@@ -714,11 +731,6 @@ export class VoiceManager {
   public removePeer(peerId: string) {
     const peer = this.peerConnections.get(peerId);
     if (peer) {
-      if (peer.audioSourceNode) {
-        try {
-          peer.audioSourceNode.disconnect();
-        } catch (e) {}
-      }
       if (peer.audioElement) {
         peer.audioElement.pause();
         peer.audioElement.srcObject = null;
@@ -747,11 +759,6 @@ export class VoiceManager {
       this.audioContext = null;
     }
     this.peerConnections.forEach((peer) => {
-      if (peer.audioSourceNode) {
-        try {
-          peer.audioSourceNode.disconnect();
-        } catch (e) {}
-      }
       if (peer.audioElement) {
         peer.audioElement.pause();
         peer.audioElement.srcObject = null;
