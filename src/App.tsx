@@ -290,39 +290,97 @@ export default function App() {
       });
     }
 
+    // Clean any prior listeners before attaching new ones
+    socket.off('room:error');
+    socket.off('room:state');
+    socket.off('room:joined');
+    socket.off('room:participants');
+    socket.off('room:userJoined');
+    socket.off('room:userLeft');
+    socket.off('participant:left');
+    socket.off('participant:voice:updated');
+    socket.off('participant:updated');
+    socket.off('board:element:created');
+    socket.off('board:element:updated');
+    socket.off('board:elements:deleted');
+    socket.off('board:elements:deletedBatch');
+    socket.off('board:elements:replaced');
+    socket.off('board:page:cleared');
+    socket.off('board:cleared');
+    socket.off('board:page:changed');
+    socket.off('board:page:added');
+    socket.off('board:background:changed');
+    socket.off('board:background:updated');
+    socket.off('board:lock:changed');
+    socket.off('board:lock:updated');
+    socket.off('cursor:moved');
+    socket.off('laser:pointer');
+    socket.off('board:lasered');
+    socket.off('tutor:cheered');
+    socket.off('tutor:attentioned');
+    socket.off('tutor:attention:ping');
+    socket.off('chat:message');
+
     socket.on('room:error', (err: { error: string }) => {
       setIsInRoom(false);
       showToast(`❌ ${err.error || 'Ошибка подключения к комнате'}`);
     });
 
+    socket.on('room:state', (data: any) => {
+      if (!data?.room) return;
+      const r = data.room;
+      if (r.id) setRoomId(r.id);
+      if (r.title) setRoomTitle(r.title);
+      if (r.subject) setSubject(r.subject);
+      if (typeof r.isLocked === 'boolean') setIsLocked(r.isLocked);
+      if (r.background) setBackground(r.background);
+      if (typeof r.totalPages === 'number') setTotalPages(r.totalPages);
+      if (typeof r.activePageIndex === 'number') setActivePageIndex(r.activePageIndex);
+      if (r.pages) setPages(r.pages);
+
+      if (r.participants) {
+        setParticipants(r.participants);
+      }
+      if (Array.isArray(r.chatMessages)) {
+        setChatMessages(r.chatMessages);
+      }
+    });
+
     socket.on('room:joined', (data) => {
       setMyUserId(data.userId || socket.id);
-      setIsLocked(!!data.isLocked);
+      if (typeof data.isLocked === 'boolean') setIsLocked(data.isLocked);
       if (data.title) setRoomTitle(data.title);
       if (data.subject) setSubject(data.subject);
+      if (data.roomId) setRoomId(data.roomId);
 
       if (data.boardState) {
-        setPages(data.boardState.pages || { 0: [] });
-        setBackground(data.boardState.background || 'grid');
-        setTotalPages(data.boardState.totalPages || 1);
-        setActivePageIndex(data.boardState.activePageIndex || 0);
+        if (data.boardState.pages) setPages(data.boardState.pages);
+        if (data.boardState.background) setBackground(data.boardState.background);
+        if (typeof data.boardState.totalPages === 'number') setTotalPages(data.boardState.totalPages);
+        if (typeof data.boardState.activePageIndex === 'number') setActivePageIndex(data.boardState.activePageIndex);
+      }
+      if (Array.isArray(data.chatMessages)) {
+        setChatMessages(data.chatMessages);
       }
     });
 
     socket.on('room:participants', (list: Participant[]) => {
+      if (!Array.isArray(list)) return;
       const map: Record<string, Participant> = {};
       list.forEach((p) => {
-        map[p.id] = p;
+        if (p?.id) map[p.id] = p;
       });
       setParticipants(map);
     });
 
     socket.on('room:userJoined', (p: Participant) => {
-      setParticipants((prev) => ({ ...prev, [p.id]: p }));
-      showToast(`${p.name} (${p.role === 'tutor' ? 'Преподаватель' : 'Ученик'}) присоединился к уроку`);
+      if (p?.id) {
+        setParticipants((prev) => ({ ...prev, [p.id]: p }));
+        showToast(`${p.name} (${p.role === 'tutor' ? 'Преподаватель' : 'Ученик'}) присоединился к уроку`);
+      }
     });
 
-    socket.on('room:userLeft', ({ userId, userName: leftName }) => {
+    const handleUserLeave = ({ userId, userName: leftName }: { userId: string; userName?: string }) => {
       setParticipants((prev) => {
         const next = { ...prev };
         delete next[userId];
@@ -331,10 +389,36 @@ export default function App() {
       if (leftName) {
         showToast(`${leftName} покинул занятие`);
       }
+    };
+
+    socket.on('room:userLeft', handleUserLeave);
+    socket.on('participant:left', handleUserLeave);
+
+    socket.on('participant:voice:updated', ({ userId, micMuted, isSpeaking }: { userId: string; micMuted: boolean; isSpeaking: boolean }) => {
+      setParticipants((prev) => {
+        if (!prev[userId]) return prev;
+        return {
+          ...prev,
+          [userId]: {
+            ...prev[userId],
+            micMuted,
+            isSpeaking,
+          },
+        };
+      });
+    });
+
+    socket.on('participant:updated', (updatedUser: Participant) => {
+      if (updatedUser?.id) {
+        setParticipants((prev) => ({
+          ...prev,
+          [updatedUser.id]: updatedUser,
+        }));
+      }
     });
 
     // Real-time Whiteboard socket events
-    socket.on('board:element:created', ({ element, pageIndex: pIndex }) => {
+    socket.on('board:element:created', ({ element, pageIndex: pIndex }: { element: any; pageIndex: number }) => {
       setPages((prev) => {
         const list = prev[pIndex] || [];
         if (list.some((el) => el.id === element.id)) return prev;
@@ -345,7 +429,7 @@ export default function App() {
       });
     });
 
-    socket.on('board:element:updated', ({ element, pageIndex: pIndex }) => {
+    socket.on('board:element:updated', ({ element, pageIndex: pIndex }: { element: any; pageIndex: number }) => {
       setPages((prev) => {
         const list = prev[pIndex] || [];
         return {
@@ -355,57 +439,86 @@ export default function App() {
       });
     });
 
-    socket.on('board:elements:deleted', ({ elementIds, pageIndex: pIndex }) => {
-      const set = new Set(elementIds);
+    socket.on('board:elements:deleted', ({ elementIds, pageIndex: pIndex }: { elementIds: string[]; pageIndex: number }) => {
+      const set = new Set(elementIds || []);
       setPages((prev) => ({
         ...prev,
         [pIndex]: (prev[pIndex] || []).filter((el) => !set.has(el.id)),
       }));
     });
 
-    socket.on('board:elements:replaced', ({ elements: newElements, pageIndex: pIndex }) => {
+    socket.on('board:elements:deletedBatch', ({ elementIds, pageIndex: pIndex }: { elementIds: string[]; pageIndex: number }) => {
+      const set = new Set(elementIds || []);
       setPages((prev) => ({
         ...prev,
-        [pIndex]: newElements,
+        [pIndex]: (prev[pIndex] || []).filter((el) => !set.has(el.id)),
       }));
     });
 
-    socket.on('board:page:cleared', ({ pageIndex: pIndex }) => {
+    socket.on('board:elements:replaced', ({ elements: newElements, pageIndex: pIndex }: { elements: any[]; pageIndex: number }) => {
+      setPages((prev) => ({
+        ...prev,
+        [pIndex]: newElements || [],
+      }));
+    });
+
+    const handleClearPageEvent = ({ pageIndex: pIndex }: { pageIndex: number }) => {
       setPages((prev) => ({
         ...prev,
         [pIndex]: [],
       }));
       showToast(`Страница ${pIndex + 1} очищена`);
-    });
+    };
 
-    socket.on('board:background:updated', ({ background: newBg }) => {
-      setBackground(newBg);
-    });
+    socket.on('board:page:cleared', handleClearPageEvent);
+    socket.on('board:cleared', handleClearPageEvent);
 
-    socket.on('board:lock:updated', ({ isLocked: locked }) => {
-      setIsLocked(locked);
-      showToast(locked ? '🔒 Преподаватель заблокировал доску для учеников' : '🔓 Доска открыта для рисования');
-    });
-
-    // Ephemeral multiplayer sockets
-    socket.on('cursor:moved', ({ userId, x, y, userName: cName, userColor: cColor, pageIndex: cPage }) => {
-      if (cPage === activePageIndex) {
-        setCursors((prev) => ({
-          ...prev,
-          [userId]: {
-            x,
-            y,
-            userName: cName,
-            userColor: cColor,
-            lastActive: Date.now(),
-          },
-        }));
+    socket.on('board:page:changed', ({ pageIndex: newIdx }: { pageIndex: number }) => {
+      if (typeof newIdx === 'number') {
+        setActivePageIndex(newIdx);
       }
     });
 
-    socket.on('laser:pointer', (point: LaserPoint) => {
-      setLaserPoints((prev) => [...prev.slice(-40), point]);
+    socket.on('board:page:added', ({ totalPages: tPages, activePageIndex: aIdx }: { totalPages: number; activePageIndex: number }) => {
+      if (typeof tPages === 'number') setTotalPages(tPages);
+      if (typeof aIdx === 'number') setActivePageIndex(aIdx);
     });
+
+    const handleBackgroundUpdate = ({ background: newBg }: { background: any }) => {
+      if (newBg) setBackground(newBg);
+    };
+
+    socket.on('board:background:updated', handleBackgroundUpdate);
+    socket.on('board:background:changed', handleBackgroundUpdate);
+
+    const handleLockUpdate = ({ isLocked: locked }: { isLocked: boolean }) => {
+      setIsLocked(locked);
+      showToast(locked ? '🔒 Преподаватель заблокировал доску для учеников' : '🔓 Доска открыта для рисования');
+    };
+
+    socket.on('board:lock:updated', handleLockUpdate);
+    socket.on('board:lock:changed', handleLockUpdate);
+
+    // Ephemeral multiplayer sockets
+    socket.on('cursor:moved', ({ userId, x, y, userName: cName, userColor: cColor, pageIndex: cPage }) => {
+      setCursors((prev) => ({
+        ...prev,
+        [userId]: {
+          x,
+          y,
+          userName: cName,
+          userColor: cColor,
+          lastActive: Date.now(),
+        },
+      }));
+    });
+
+    const handleLaser = (point: LaserPoint) => {
+      setLaserPoints((prev) => [...prev.slice(-40), point]);
+    };
+
+    socket.on('laser:pointer', handleLaser);
+    socket.on('board:lasered', handleLaser);
 
     // Tutor superpower events
     socket.on('tutor:cheered', ({ message }) => {
@@ -417,9 +530,12 @@ export default function App() {
       showToast(`🌟 ${message || 'Отличная работа!'}`);
     });
 
-    socket.on('tutor:attentioned', ({ text }) => {
-      showToast(`🔔 ${text || 'Внимание на доску!'}`);
-    });
+    const handleAttention = ({ message, text }: { message?: string; text?: string }) => {
+      showToast(`🔔 ${message || text || 'Внимание на доску!'}`);
+    };
+
+    socket.on('tutor:attentioned', handleAttention);
+    socket.on('tutor:attention:ping', handleAttention);
 
     // Chat socket
     socket.on('chat:message', (msg: ChatMessage) => {

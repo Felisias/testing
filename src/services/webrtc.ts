@@ -167,6 +167,24 @@ export class VoiceManager {
     socket.on('participant:left', ({ userId }: { userId: string }) => {
       this.removePeer(userId);
     });
+
+    socket.on('participant:joined', (p: { id: string }) => {
+      if (p && p.id && p.id !== socket.id) {
+        this.callPeer(p.id);
+      }
+    });
+
+    socket.on('room:participants', (list: Array<{ id: string }>) => {
+      const myId = socket.id;
+      if (!Array.isArray(list)) return;
+      list.forEach((p) => {
+        if (p && p.id && p.id !== myId && !this.peerConnections.has(p.id)) {
+          if (myId && p.id > myId) {
+            this.callPeer(p.id);
+          }
+        }
+      });
+    });
   }
 
   // Device Enumeration

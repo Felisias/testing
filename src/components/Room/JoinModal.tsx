@@ -325,12 +325,20 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     try {
       let finalCode = code;
       const checkRes = await fetch(`/api/rooms/${encodeURIComponent(code)}`);
-      if (checkRes.ok) {
-        const data = await checkRes.json();
-        if (data?.id) finalCode = data.id;
+      if (!checkRes.ok) {
+        setAuthError(`Комната с кодом "${code}" не найдена. Пожалуйста, проверьте код или попросите преподавателя создать комнату.`);
+        setAuthLoading(false);
+        return;
       }
+      const data = await checkRes.json();
+      if (!data || !data.exists) {
+        setAuthError(`Комната с кодом "${code}" не найдена. Создать комнату может только преподаватель.`);
+        setAuthLoading(false);
+        return;
+      }
+      if (data?.id) finalCode = data.id;
 
-      saveRoomToHistory(finalCode, `Урок ${finalCode}`, 'Занятие', 'student');
+      saveRoomToHistory(finalCode, data.title || `Урок ${finalCode}`, data.subject || 'Занятие', 'student');
 
       onJoinRoom({
         roomId: finalCode,
@@ -338,20 +346,11 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
         role: 'student',
         color: userColor,
         avatar: guestAvatar,
-        title: `Занятие ${finalCode}`,
-        subject: 'Занятие',
+        title: data.title || `Занятие ${finalCode}`,
+        subject: data.subject || 'Занятие',
       });
-    } catch {
-      saveRoomToHistory(code, `Урок ${code}`, 'Занятие', 'student');
-      onJoinRoom({
-        roomId: code,
-        userName: name,
-        role: 'student',
-        color: userColor,
-        avatar: guestAvatar,
-        title: `Занятие ${code}`,
-        subject: 'Занятие',
-      });
+    } catch (err: any) {
+      setAuthError(err?.message || 'Не удалось подключиться к комнате. Проверьте соединение с сервером.');
     } finally {
       setAuthLoading(false);
     }
@@ -366,7 +365,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     const isStudent = currentUser.role === 'student';
     let targetCode = normalizeRoomCode(roomCode);
 
-    // Students cannot create rooms
+    // Students or user in 'join' tab MUST join an existing room
     if (isStudent || roomTab === 'join') {
       if (!targetCode) {
         setAuthError('Введите код комнаты, полученный от преподавателя');
@@ -377,12 +376,20 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
       try {
         let finalCode = targetCode;
         const checkRes = await fetch(`/api/rooms/${encodeURIComponent(targetCode)}`);
-        if (checkRes.ok) {
-          const data = await checkRes.json();
-          if (data?.id) finalCode = data.id;
+        if (!checkRes.ok) {
+          setAuthError(`Комната с кодом "${targetCode}" не найдена. Пожалуйста, проверьте код или попросите преподавателя создать комнату.`);
+          setAuthLoading(false);
+          return;
         }
+        const data = await checkRes.json();
+        if (!data || !data.exists) {
+          setAuthError(`Комната с кодом "${targetCode}" не найдена. Создать комнату может только преподаватель.`);
+          setAuthLoading(false);
+          return;
+        }
+        if (data?.id) finalCode = data.id;
 
-        saveRoomToHistory(finalCode, `Урок ${finalCode}`, 'Занятие', currentUser.role);
+        saveRoomToHistory(finalCode, data.title || `Урок ${finalCode}`, data.subject || 'Занятие', currentUser.role);
 
         onJoinRoom({
           roomId: finalCode,
@@ -391,18 +398,11 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
           color: userColor,
           avatar: currentUser.avatar || regAvatar,
           userId: currentUser.id,
+          title: data.title,
+          subject: data.subject,
         });
-      } catch {
-        saveRoomToHistory(targetCode, `Урок ${targetCode}`, 'Занятие', currentUser.role);
-
-        onJoinRoom({
-          roomId: targetCode,
-          userName: currentUser.name,
-          role: currentUser.role,
-          color: userColor,
-          avatar: currentUser.avatar || regAvatar,
-          userId: currentUser.id,
-        });
+      } catch (err: any) {
+        setAuthError(err?.message || 'Не удалось проверить комнату. Проверьте подключение к сети.');
       } finally {
         setAuthLoading(false);
       }

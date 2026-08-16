@@ -618,19 +618,8 @@ async function startServer() {
       });
     }
 
-    const normalized = normalizeRoomId(rawId);
-    if (normalized.length >= 2) {
-      return res.json({
-        id: normalized,
-        title: 'Урок с преподавателем',
-        subject: 'Занятие',
-        participantCount: 0,
-        isLocked: false,
-        exists: true,
-      });
-    }
-
-    return res.status(404).json({ error: 'Комната не найдена', exists: false });
+    // Only return exists: true if room ACTUALLY exists in memory
+    return res.status(404).json({ error: 'Комната с таким кодом не найдена', exists: false });
   });
 
   // ================= Socket.IO Real-time Logic =================
@@ -660,10 +649,25 @@ async function startServer() {
         subject?: string;
         userId?: string;
       }) => {
-        const normRoomId = normalizeRoomId(roomId) || 'ROOM-1000';
-        currentRoomId = normRoomId;
+        const normRoomId = normalizeRoomId(roomId);
+        if (!normRoomId) {
+          socket.emit('room:error', { error: 'Не указан код комнаты' });
+          return;
+        }
 
+        const existingRoom = findRoom(normRoomId);
+
+        // If user is a student/guest and the room does not exist, reject!
+        if (!existingRoom && role !== 'tutor') {
+          socket.emit('room:error', {
+            error: `Комната ${normRoomId} не найдена. Создать комнату может только преподаватель.`,
+          });
+          return;
+        }
+
+        // Get or create room (Tutors can create, existing rooms are found)
         const room = getOrCreateRoom(normRoomId, title, subject);
+        currentRoomId = room.id;
 
         // Assign tutorId if room doesn't have one or user joins as tutor
         if (!room.tutorId || role === 'tutor') {
@@ -692,7 +696,7 @@ async function startServer() {
         };
 
         room.participants[socket.id] = currentUser;
-        socket.join(normRoomId);
+        socket.join(room.id);
 
         // Calculate accurate current timer if running
         let currentTimerSec = room.timerSeconds;
@@ -722,9 +726,10 @@ async function startServer() {
           self: currentUser,
         });
 
-        // Also emit room:joined with boardState
+        // Also emit room:joined with complete boardState
         socket.emit('room:joined', {
           userId: socket.id,
+          roomId: room.id,
           isLocked: room.isLocked,
           title: room.title,
           subject: room.subject,
@@ -734,14 +739,19 @@ async function startServer() {
             totalPages: room.totalPages,
             activePageIndex: room.activePageIndex,
           },
+          timer: {
+            timerSeconds: currentTimerSec,
+            isTimerRunning: room.isTimerRunning,
+          },
+          chatMessages: room.chatMessages,
         });
 
         // Emit updated participants list to everyone in the room
-        io.to(normRoomId).emit('room:participants', Object.values(room.participants));
+        io.to(room.id).emit('room:participants', Object.values(room.participants));
 
         // Notify other participants in the room
-        socket.to(normRoomId).emit('participant:joined', currentUser);
-        socket.to(normRoomId).emit('room:userJoined', currentUser);
+        socket.to(room.id).emit('participant:joined', currentUser);
+        socket.to(room.id).emit('room:userJoined', currentUser);
 
         // Add system message
         const joinMsg: ChatMessage = {
@@ -753,7 +763,7 @@ async function startServer() {
           timestamp: Date.now(),
         };
         room.chatMessages.push(joinMsg);
-        io.to(normRoomId).emit('chat:message', joinMsg);
+        io.to(room.id).emit('chat:message', joinMsg);
       }
     );
 
@@ -921,7 +931,7 @@ async function startServer() {
       }
     );
 
-    // Delete element
+    // Delete element (single)
     socket.on(
       'board:element:delete',
       ({
@@ -938,6 +948,7 @@ async function startServer() {
         if (room.pages[pageIndex]) {
           room.pages[pageIndex] = room.pages[pageIndex].filter((el) => el.id !== elementId);
           socket.to(currentRoomId).emit('board:element:deleted', { elementId, pageIndex });
+          socket.to(currentRoomId).emit('board:elements:deleted', { elementIds: [elementId], pageIndex });
         }
       }
     );
@@ -959,6 +970,7 @@ async function startServer() {
         if (room.pages[pageIndex]) {
           const idsSet = new Set(elementIds);
           room.pages[pageIndex] = room.pages[pageIndex].filter((el) => !idsSet.has(el.id));
+          socket.to(currentRoomId).emit('board:elements:deleted', { elementIds, pageIndex });
           socket.to(currentRoomId).emit('board:elements:deletedBatch', { elementIds, pageIndex });
         }
       }
@@ -972,6 +984,7 @@ async function startServer() {
 
       room.pages[pageIndex] = [];
       io.to(currentRoomId).emit('board:cleared', { pageIndex });
+      io.to(currentRoomId).emit('board:page:cleared', { pageIndex });
     });
 
     // Replace board page elements (Atomic Undo / Redo synchronization)
@@ -1020,6 +1033,7 @@ async function startServer() {
       const room = rooms[currentRoomId];
       room.background = background;
       io.to(currentRoomId).emit('board:background:changed', { background });
+      io.to(currentRoomId).emit('board:background:updated', { background });
     });
 
     // Lock/Unlock board
@@ -1029,6 +1043,7 @@ async function startServer() {
       if (currentUser?.role !== 'tutor') return;
       room.isLocked = !room.isLocked;
       io.to(currentRoomId).emit('board:lock:changed', { isLocked: room.isLocked });
+      io.to(currentRoomId).emit('board:lock:updated', { isLocked: room.isLocked });
     });
 
     // User profile/avatar live update
@@ -1042,6 +1057,7 @@ async function startServer() {
 
       room.participants[socket.id] = currentUser;
       io.to(currentRoomId).emit('participant:updated', currentUser);
+      io.to(currentRoomId).emit('room:participants', Object.values(room.participants));
     });
 
     // Cursor position broadcast
@@ -1062,7 +1078,7 @@ async function startServer() {
     // Laser pointer
     socket.on('board:laser', (data: { x: number; y: number; pageIndex: number }) => {
       if (!currentRoomId || !currentUser) return;
-      socket.to(currentRoomId).emit('board:lasered', {
+      const payload = {
         userId: socket.id,
         userName: currentUser.name,
         color: currentUser.color,
@@ -1071,7 +1087,9 @@ async function startServer() {
         y: data.y,
         pageIndex: data.pageIndex,
         timestamp: Date.now(),
-      });
+      };
+      socket.to(currentRoomId).emit('board:lasered', payload);
+      socket.to(currentRoomId).emit('laser:pointer', payload);
     });
 
     // Chat message
@@ -1120,25 +1138,6 @@ async function startServer() {
       });
     });
 
-    // Profile update (name, avatar, color)
-    socket.on('user:profile:update', (data: { userName?: string; avatar?: string; color?: string }) => {
-      if (!currentRoomId || !rooms[currentRoomId] || !currentUser) return;
-      const room = rooms[currentRoomId];
-
-      if (data.userName && data.userName.trim()) {
-        currentUser.name = data.userName.trim();
-      }
-      if (data.avatar) {
-        currentUser.avatar = data.avatar;
-      }
-      if (data.color) {
-        currentUser.color = data.color;
-      }
-
-      room.participants[socket.id] = currentUser;
-      io.to(currentRoomId).emit('room:participants', Object.values(room.participants));
-    });
-
     // Tutor Cheer / Confetti event
     socket.on('tutor:cheer', (data: { studentId?: string; message?: string }) => {
       if (!currentRoomId || currentUser?.role !== 'tutor') return;
@@ -1151,9 +1150,12 @@ async function startServer() {
     // Tutor Attention Ping
     socket.on('tutor:attention', (data: { text?: string }) => {
       if (!currentRoomId || currentUser?.role !== 'tutor') return;
-      socket.to(currentRoomId).emit('tutor:attention:ping', {
-        message: data.text || 'Обратите внимание на доску!',
-      });
+      const pingPayload = {
+        message: data?.text || 'Обратите внимание на доску!',
+        text: data?.text || 'Обратите внимание на доску!',
+      };
+      io.to(currentRoomId).emit('tutor:attention:ping', pingPayload);
+      io.to(currentRoomId).emit('tutor:attentioned', pingPayload);
     });
 
     // Disconnect handler
@@ -1176,6 +1178,11 @@ async function startServer() {
           userId: socket.id,
           userName: currentUser.name,
         });
+        io.to(currentRoomId).emit('room:userLeft', {
+          userId: socket.id,
+          userName: currentUser.name,
+        });
+        io.to(currentRoomId).emit('room:participants', Object.values(room.participants));
         io.to(currentRoomId).emit('chat:message', leaveMsg);
 
         if (Object.keys(room.participants).length === 0) {
