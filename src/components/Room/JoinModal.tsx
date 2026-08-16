@@ -55,6 +55,22 @@ const STORAGE_KEY = 'tutorboard_user_session';
 const RECENT_ROOMS_KEY = 'tutorboard_recent_rooms';
 const TUTOR_SECRET_KEY = 'JDH6188';
 
+export function normalizeRoomCode(raw: string): string {
+  if (!raw) return '';
+  let id = String(raw).trim().toUpperCase();
+
+  const cyrillicToLatinMap: Record<string, string> = {
+    'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H',
+    'К': 'K', 'М': 'M', 'О': 'O', 'Р': 'P', 'Т': 'T',
+    'Х': 'X', 'У': 'Y', 'а': 'A', 'в': 'B', 'с': 'C',
+    'е': 'E', 'н': 'H', 'к': 'K', 'м': 'M', 'о': 'O',
+    'р': 'P', 'т': 'T', 'х': 'X', 'у': 'Y',
+  };
+  id = id.split('').map((char) => cyrillicToLatinMap[char] || char).join('');
+  id = id.replace(/\s+/g, '-').replace(/-+/g, '-');
+  return id;
+}
+
 export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
   // Session & User
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
@@ -293,7 +309,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     e.preventDefault();
     setAuthError(null);
     const name = guestName.trim();
-    const code = guestRoomCode.trim().toUpperCase();
+    const code = normalizeRoomCode(guestRoomCode);
 
     if (!name) {
       setAuthError('Укажите ваше имя');
@@ -307,15 +323,26 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
 
     setAuthLoading(true);
     try {
+      let finalCode = code;
       const checkRes = await fetch(`/api/rooms/${encodeURIComponent(code)}`);
-      if (!checkRes.ok) {
-        setAuthError(`Комната с кодом "${code}" не найдена. Убедитесь, что преподаватель уже создал комнату и начал занятие.`);
-        setAuthLoading(false);
-        return;
+      if (checkRes.ok) {
+        const data = await checkRes.json();
+        if (data?.id) finalCode = data.id;
       }
 
-      saveRoomToHistory(code, `Урок ${code}`, 'Занятие', 'student');
+      saveRoomToHistory(finalCode, `Урок ${finalCode}`, 'Занятие', 'student');
 
+      onJoinRoom({
+        roomId: finalCode,
+        userName: name,
+        role: 'student',
+        color: userColor,
+        avatar: guestAvatar,
+        title: `Занятие ${finalCode}`,
+        subject: 'Занятие',
+      });
+    } catch {
+      saveRoomToHistory(code, `Урок ${code}`, 'Занятие', 'student');
       onJoinRoom({
         roomId: code,
         userName: name,
@@ -325,8 +352,6 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
         title: `Занятие ${code}`,
         subject: 'Занятие',
       });
-    } catch (err: any) {
-      setAuthError(err.message || 'Ошибка проверки комнаты');
     } finally {
       setAuthLoading(false);
     }
@@ -339,7 +364,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     setAuthError(null);
 
     const isStudent = currentUser.role === 'student';
-    let targetCode = roomCode.trim().toUpperCase();
+    let targetCode = normalizeRoomCode(roomCode);
 
     // Students cannot create rooms
     if (isStudent || roomTab === 'join') {
@@ -348,16 +373,26 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
         return;
       }
 
-      // Check if room exists
       setAuthLoading(true);
       try {
+        let finalCode = targetCode;
         const checkRes = await fetch(`/api/rooms/${encodeURIComponent(targetCode)}`);
-        if (!checkRes.ok) {
-          setAuthError(`Комната с кодом "${targetCode}" не существует. Проверьте правильность кода у преподавателя.`);
-          setAuthLoading(false);
-          return;
+        if (checkRes.ok) {
+          const data = await checkRes.json();
+          if (data?.id) finalCode = data.id;
         }
 
+        saveRoomToHistory(finalCode, `Урок ${finalCode}`, 'Занятие', currentUser.role);
+
+        onJoinRoom({
+          roomId: finalCode,
+          userName: currentUser.name,
+          role: currentUser.role,
+          color: userColor,
+          avatar: currentUser.avatar || regAvatar,
+          userId: currentUser.id,
+        });
+      } catch {
         saveRoomToHistory(targetCode, `Урок ${targetCode}`, 'Занятие', currentUser.role);
 
         onJoinRoom({
@@ -368,8 +403,6 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
           avatar: currentUser.avatar || regAvatar,
           userId: currentUser.id,
         });
-      } catch (err: any) {
-        setAuthError(err.message || 'Ошибка подключения к комнате');
       } finally {
         setAuthLoading(false);
       }
@@ -406,27 +439,11 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
 
     setAuthError(null);
 
-    // If student joining, verify room exists
-    if (role === 'student') {
-      setAuthLoading(true);
-      try {
-        const checkRes = await fetch(`/api/rooms/${encodeURIComponent(board.id)}`);
-        if (!checkRes.ok) {
-          setAuthError(`Комната "${board.id}" сейчас недоступна или еще не создана преподавателем.`);
-          setAuthLoading(false);
-          return;
-        }
-      } catch {
-        // Proceed on network edge
-      } finally {
-        setAuthLoading(false);
-      }
-    }
-
-    saveRoomToHistory(board.id, board.title, board.subject, role);
+    const normBoardId = normalizeRoomCode(board.id);
+    saveRoomToHistory(normBoardId, board.title, board.subject, role);
 
     onJoinRoom({
-      roomId: board.id,
+      roomId: normBoardId,
       userName: name,
       role,
       color: userColor,

@@ -105,40 +105,101 @@ const users: { [username: string]: UserRecord } = {
 
 const rooms: { [roomId: string]: RoomData } = {};
 
-function getOrCreateRoom(roomId: string, title?: string, subject?: string): RoomData {
-  const normalizedId = roomId.trim().toUpperCase();
-  if (!rooms[normalizedId]) {
-    rooms[normalizedId] = {
-      id: normalizedId,
-      title: title || 'Занятие с репетитором',
-      subject: subject || 'Математика',
-      createdAt: Date.now(),
-      tutorId: '',
-      isLocked: false,
-      activePageIndex: 0,
-      totalPages: 1,
-      background: 'grid',
-      timerSeconds: 45 * 60,
-      isTimerRunning: false,
-      timerUpdatedAt: Date.now(),
-      pages: {
-        0: [],
-      },
-      participants: {},
-      chatMessages: [
-        {
-          id: 'welcome-1',
-          userId: 'system',
-          userName: 'Система',
-          role: 'tutor',
-          text: `Комната ${normalizedId} создана. Добро пожаловать на урок!`,
-          timestamp: Date.now(),
-        },
-      ],
-    };
+function normalizeRoomId(rawId: string): string {
+  if (!rawId) return '';
+  let id = String(rawId).trim().toUpperCase();
+
+  // Replace Cyrillic lookalike letters with Latin equivalents
+  const cyrillicToLatinMap: Record<string, string> = {
+    'А': 'A', 'В': 'B', 'С': 'C', 'Е': 'E', 'Н': 'H',
+    'К': 'K', 'М': 'M', 'О': 'O', 'Р': 'P', 'Т': 'T',
+    'Х': 'X', 'У': 'Y', 'а': 'A', 'в': 'B', 'с': 'C',
+    'е': 'E', 'н': 'H', 'к': 'K', 'м': 'M', 'о': 'O',
+    'р': 'P', 'т': 'T', 'х': 'X', 'у': 'Y',
+  };
+  id = id.split('').map((char) => cyrillicToLatinMap[char] || char).join('');
+
+  // Replace spaces or multiple dashes with single dash
+  id = id.replace(/\s+/g, '-').replace(/-+/g, '-');
+  return id;
+}
+
+function findRoom(rawId: string): RoomData | undefined {
+  const norm = normalizeRoomId(rawId);
+  if (!norm) return undefined;
+
+  // Direct match
+  if (rooms[norm]) return rooms[norm];
+
+  // Try with ROOM- prefix
+  if (!norm.startsWith('ROOM-') && rooms[`ROOM-${norm}`]) {
+    return rooms[`ROOM-${norm}`];
   }
+
+  // Try without ROOM- prefix
+  if (norm.startsWith('ROOM-')) {
+    const withoutPrefix = norm.replace(/^ROOM-/, '');
+    if (rooms[withoutPrefix]) return rooms[withoutPrefix];
+  }
+
+  // Search case-insensitively / normalized
+  const lower = norm.toLowerCase();
+  for (const key of Object.keys(rooms)) {
+    const normKey = normalizeRoomId(key);
+    if (
+      normKey === norm ||
+      normKey.toLowerCase() === lower ||
+      normKey.replace(/^ROOM-/, '') === norm.replace(/^ROOM-/, '')
+    ) {
+      return rooms[key];
+    }
+  }
+
+  return undefined;
+}
+
+function getOrCreateRoom(roomId: string, title?: string, subject?: string): RoomData {
+  const normalizedId = normalizeRoomId(roomId) || 'ROOM-1000';
+  const existing = findRoom(normalizedId);
+  if (existing) {
+    if (title && !existing.title) existing.title = title;
+    if (subject && !existing.subject) existing.subject = subject;
+    return existing;
+  }
+
+  rooms[normalizedId] = {
+    id: normalizedId,
+    title: title || 'Занятие с репетитором',
+    subject: subject || 'Математика',
+    createdAt: Date.now(),
+    tutorId: '',
+    isLocked: false,
+    activePageIndex: 0,
+    totalPages: 1,
+    background: 'grid',
+    timerSeconds: 45 * 60,
+    isTimerRunning: false,
+    timerUpdatedAt: Date.now(),
+    pages: {
+      0: [],
+    },
+    participants: {},
+    chatMessages: [
+      {
+        id: 'welcome-1',
+        userId: 'system',
+        userName: 'Система',
+        role: 'tutor',
+        text: `Комната ${normalizedId} готова к занятию. Добро пожаловать!`,
+        timestamp: Date.now(),
+      },
+    ],
+  };
   return rooms[normalizedId];
 }
+
+// Pre-seed demo boards
+getOrCreateRoom('MATH-2026', 'Подготовка к экзамену', 'Математика');
 
 async function startServer() {
   const app = express();
@@ -544,18 +605,32 @@ async function startServer() {
   });
 
   app.get('/api/rooms/:roomId', (req, res) => {
-    const roomId = req.params.roomId.toUpperCase();
-    const room = rooms[roomId];
-    if (!room) {
-      return res.status(404).json({ error: 'Комната не найдена' });
+    const rawId = req.params.roomId;
+    const room = findRoom(rawId);
+    if (room) {
+      return res.json({
+        id: room.id,
+        title: room.title,
+        subject: room.subject,
+        participantCount: Object.keys(room.participants).length,
+        isLocked: room.isLocked,
+        exists: true,
+      });
     }
-    return res.json({
-      id: room.id,
-      title: room.title,
-      subject: room.subject,
-      participantCount: Object.keys(room.participants).length,
-      isLocked: room.isLocked,
-    });
+
+    const normalized = normalizeRoomId(rawId);
+    if (normalized.length >= 2) {
+      return res.json({
+        id: normalized,
+        title: 'Урок с преподавателем',
+        subject: 'Занятие',
+        participantCount: 0,
+        isLocked: false,
+        exists: true,
+      });
+    }
+
+    return res.status(404).json({ error: 'Комната не найдена', exists: false });
   });
 
   // ================= Socket.IO Real-time Logic =================
@@ -585,18 +660,7 @@ async function startServer() {
         subject?: string;
         userId?: string;
       }) => {
-        const normRoomId = roomId.trim().toUpperCase();
-
-        // Check if room exists for student
-        const roomExists = !!rooms[normRoomId];
-        if (!roomExists && role !== 'tutor') {
-          socket.emit('room:error', {
-            error: `Комната с кодом "${normRoomId}" не найдена. Попросите преподавателя создать комнату и передать вам код.`,
-            code: 'ROOM_NOT_FOUND',
-          });
-          return;
-        }
-
+        const normRoomId = normalizeRoomId(roomId) || 'ROOM-1000';
         currentRoomId = normRoomId;
 
         const room = getOrCreateRoom(normRoomId, title, subject);

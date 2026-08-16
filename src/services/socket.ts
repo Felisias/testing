@@ -5,11 +5,14 @@ let socket: Socket | null = null;
 export function getSocket(): Socket {
   if (!socket) {
     socket = io({
-      autoConnect: false,
+      autoConnect: true,
       reconnection: true,
-      reconnectionAttempts: 10,
+      reconnectionAttempts: 20,
       reconnectionDelay: 1000,
+      transports: ['websocket', 'polling'],
     });
+  } else if (!socket.connected) {
+    socket.connect();
   }
   return socket;
 }

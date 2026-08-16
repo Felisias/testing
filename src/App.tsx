@@ -271,7 +271,7 @@ export default function App() {
 
     const socket = getSocket();
 
-    socket.emit('room:join', {
+    const joinPayload = {
       roomId: targetRoomId,
       userName: targetName,
       role: targetRole,
@@ -279,7 +279,16 @@ export default function App() {
       avatar: targetAvatar || '🎓',
       title: targetTitle,
       subject: targetSubject,
-    });
+    };
+
+    if (socket.connected) {
+      socket.emit('room:join', joinPayload);
+    } else {
+      socket.connect();
+      socket.once('connect', () => {
+        socket.emit('room:join', joinPayload);
+      });
+    }
 
     socket.on('room:error', (err: { error: string }) => {
       setIsInRoom(false);
