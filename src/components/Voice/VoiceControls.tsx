@@ -33,7 +33,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   userRole,
   userName,
 }) => {
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
   const [isDeafened, setIsDeafened] = useState(false);
   const [localVolume, setLocalVolume] = useState(0);
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
@@ -57,11 +57,11 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   });
 
   useEffect(() => {
-    // Check permission & init voice
-    voiceManager.initLocalAudio().then((granted) => {
-      setMicPermissionState(granted ? 'granted' : 'denied');
+    // If stream already exists, load devices
+    if (voiceManager.hasLocalStream()) {
+      setMicPermissionState('granted');
       loadDevices();
-    });
+    }
 
     voiceManager.setVolumeCallback((vol) => {
       setLocalVolume(vol);
@@ -114,9 +114,13 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
     });
   };
 
-  const handleToggleMute = () => {
-    const muted = voiceManager.toggleMute();
-    setIsMuted(muted);
+  const handleToggleMute = async () => {
+    const isNowMuted = await voiceManager.toggleMute();
+    setIsMuted(isNowMuted);
+    if (!isNowMuted) {
+      setMicPermissionState('granted');
+      loadDevices();
+    }
   };
 
   const handleToggleDeafen = () => {
@@ -127,7 +131,11 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   const handleRetryMic = async () => {
     const success = await voiceManager.initLocalAudio();
     setMicPermissionState(success ? 'granted' : 'denied');
-    if (success) loadDevices();
+    if (success) {
+      await voiceManager.setMicrophoneMuted(false);
+      setIsMuted(false);
+      loadDevices();
+    }
   };
 
   const participantList = Object.values(participants) as Participant[];

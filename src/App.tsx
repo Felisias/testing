@@ -269,8 +269,8 @@ export default function App() {
     if (targetSubject) setSubject(targetSubject);
     setIsInRoom(true);
 
-    // Eagerly acquire microphone on user gesture to establish audio stream immediately
-    voiceManager.initLocalAudio().catch(() => {});
+    // Set initial voice state to muted
+    voiceManager.setMicrophoneMuted(true);
 
     const socket = getSocket();
 
