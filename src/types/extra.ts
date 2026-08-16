@@ -46,4 +46,5 @@ export interface CodeCursor {
   avatar?: string;
   lineNumber: number;
   column: number;
+  lastActive?: number;
 }

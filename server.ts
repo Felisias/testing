@@ -529,6 +529,20 @@ async function startServer() {
     res.json({ status: 'ok', roomsCount: Object.keys(rooms).length });
   });
 
+  // Get all registered users (for tutors / site administration)
+  app.get('/api/users', (req, res) => {
+    const userList = Object.values(users).map((u) => ({
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      role: u.role,
+      avatar: u.avatar || (u.role === 'tutor' ? '👨‍🏫' : '🎓'),
+      createdAt: u.createdAt,
+      boardsCount: u.savedBoards ? u.savedBoards.length : 0,
+    }));
+    return res.json({ users: userList });
+  });
+
   app.get('/api/rooms/:roomId', (req, res) => {
     const roomId = req.params.roomId.toUpperCase();
     const room = rooms[roomId];
@@ -572,6 +586,17 @@ async function startServer() {
         userId?: string;
       }) => {
         const normRoomId = roomId.trim().toUpperCase();
+
+        // Check if room exists for student
+        const roomExists = !!rooms[normRoomId];
+        if (!roomExists && role !== 'tutor') {
+          socket.emit('room:error', {
+            error: `Комната с кодом "${normRoomId}" не найдена. Попросите преподавателя создать комнату и передать вам код.`,
+            code: 'ROOM_NOT_FOUND',
+          });
+          return;
+        }
+
         currentRoomId = normRoomId;
 
         const room = getOrCreateRoom(normRoomId, title, subject);
@@ -633,8 +658,26 @@ async function startServer() {
           self: currentUser,
         });
 
+        // Also emit room:joined with boardState
+        socket.emit('room:joined', {
+          userId: socket.id,
+          isLocked: room.isLocked,
+          title: room.title,
+          subject: room.subject,
+          boardState: {
+            pages: room.pages,
+            background: room.background,
+            totalPages: room.totalPages,
+            activePageIndex: room.activePageIndex,
+          },
+        });
+
+        // Emit updated participants list to everyone in the room
+        io.to(normRoomId).emit('room:participants', Object.values(room.participants));
+
         // Notify other participants in the room
         socket.to(normRoomId).emit('participant:joined', currentUser);
+        socket.to(normRoomId).emit('room:userJoined', currentUser);
 
         // Add system message
         const joinMsg: ChatMessage = {

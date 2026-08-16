@@ -47,71 +47,13 @@ const DEFAULT_FILES: CodeFile[] = [
     id: 'main-py',
     name: 'main.py',
     language: 'python',
-    content: `# Занятие по программированию: Python 🐍
+    content: `# main.py
 
-def solve():
-    print("Привет из среды разработки TutorBoard! 🚀")
-    numbers = [5, 2, 9, 1, 7, 3, 8]
-    print(f"Исходный список: {numbers}")
-    print(f"Отсортированный: {sorted(numbers)}")
-    
-    # Пример вычисления факториала
-    def factorial(n: int) -> int:
-        return 1 if n <= 1 else n * factorial(n - 1)
-    
-    for i in range(1, 6):
-        print(f"Факториал {i}! = {factorial(i)}")
+def main():
+    print("Привет из main.py!")
 
 if __name__ == "__main__":
-    solve()
-`,
-  },
-  {
-    id: 'index-js',
-    name: 'solution.js',
-    language: 'javascript',
-    content: `// Решение алгоритмической задачи на JavaScript ⚡
-function binarySearch(arr, target) {
-  let left = 0;
-  let right = arr.length - 1;
-  
-  while (left <= right) {
-    const mid = Math.floor((left + right) / 2);
-    if (arr[mid] === target) return mid;
-    if (arr[mid] < target) left = mid + 1;
-    else right = mid - 1;
-  }
-  return -1;
-}
-
-const numbers = [1, 3, 5, 7, 9, 11, 15, 20];
-console.log("Исходный массив:", numbers);
-console.log("Поиск числа 7 -> Индекс:", binarySearch(numbers, 7));
-console.log("Поиск числа 12 -> Индекс:", binarySearch(numbers, 12));
-`,
-  },
-  {
-    id: 'sol-cpp',
-    name: 'task.cpp',
-    language: 'cpp',
-    content: `// C++ Решение задачи 🚀
-#include <iostream>
-#include <vector>
-#include <algorithm>
-
-using namespace std;
-
-int main() {
-    vector<int> a = {4, 1, 8, 3, 9, 2};
-    sort(a.begin(), a.end());
-    
-    cout << "Sorted Array: ";
-    for (int x : a) {
-        cout << x << " ";
-    }
-    cout << endl;
-    return 0;
-}
+    main()
 `,
   },
 ];
@@ -179,6 +121,15 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   // Exact character width measurement for cursor placement
   const [charWidth, setCharWidth] = useState<number>(7.8);
   const [scrollPos, setScrollPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+  const [currentTime, setCurrentTime] = useState<number>(() => Date.now());
+
+  // Periodically update current time to evaluate cursor inactivity (> 3s)
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 400);
+    return () => clearInterval(timer);
+  }, []);
 
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const preRef = useRef<HTMLPreElement>(null);
@@ -227,6 +178,16 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       setFiles((prev) =>
         prev.map((f) => (f.id === data.fileId ? { ...f, content: data.content } : f))
       );
+      setOtherCursors((prev) => {
+        if (!prev[data.senderId]) return prev;
+        return {
+          ...prev,
+          [data.senderId]: {
+            ...prev[data.senderId],
+            lastActive: Date.now(),
+          },
+        };
+      });
     };
 
     const handleFileCreated = (data: { file: CodeFile }) => {
@@ -250,7 +211,10 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       if (cursor.userId === myUserId) return;
       setOtherCursors((prev) => ({
         ...prev,
-        [cursor.userId]: cursor,
+        [cursor.userId]: {
+          ...cursor,
+          lastActive: Date.now(),
+        },
       }));
     };
 
@@ -704,6 +668,8 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                   return null;
                 }
 
+                const isInactive = c.lastActive ? currentTime - c.lastActive > 3000 : false;
+
                 return (
                   <div
                     key={c.userId}
@@ -713,18 +679,20 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                       left: `${leftPos}px`,
                     }}
                   >
-                    {/* Caret Line */}
+                    {/* Caret Line (solid stick - stays 100% opaque at all times) */}
                     <div
-                      className="w-[2px] h-[22px]"
+                      className="w-[2px] h-[22px] rounded-xs"
                       style={{ backgroundColor: c.color }}
                     />
-                    {/* User Label Flag with Avatar */}
+                    {/* User Label Flag with Avatar (compact, fades to semi-transparent after 3s of inactivity) */}
                     <div
-                      className="absolute -top-4 left-0 text-[10px] font-mono font-semibold text-white px-1.5 py-0.2 rounded-md shadow-md whitespace-nowrap flex items-center gap-1"
+                      className={`absolute -top-3.5 left-0 text-[9px] font-sans font-semibold text-white px-1 py-[1.5px] rounded-[3px] shadow-xs whitespace-nowrap flex items-center gap-0.5 transition-opacity duration-300 ${
+                        isInactive ? 'opacity-30' : 'opacity-100'
+                      }`}
                       style={{ backgroundColor: c.color }}
                     >
-                      <span className="text-[10px]">{c.avatar || '🎓'}</span>
-                      <span>{c.userName}</span>
+                      <span className="text-[8.5px] leading-none">{c.avatar || '🎓'}</span>
+                      <span className="leading-none">{c.userName}</span>
                     </div>
                   </div>
                 );

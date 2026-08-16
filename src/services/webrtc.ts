@@ -6,6 +6,12 @@ interface PeerConnection {
   audioElement?: HTMLAudioElement;
 }
 
+export interface AudioDeviceInfo {
+  deviceId: string;
+  label: string;
+  kind: 'audioinput' | 'audiooutput';
+}
+
 export class VoiceManager {
   private localStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
@@ -19,6 +25,10 @@ export class VoiceManager {
   private isSpeaking: boolean = false;
   private speakingThreshold: number = 15; // 0-100 scale
   private audioContainer: HTMLElement | null = null;
+
+  // Selected Device IDs
+  private selectedInputDeviceId: string = 'default';
+  private selectedOutputDeviceId: string = 'default';
 
   // Reliable free STUN servers
   private rtcConfig: RTCConfiguration = {
@@ -97,6 +107,23 @@ export class VoiceManager {
 
         try {
           if (type === 'offer') {
+            const socketId = socket.id || '';
+            const isPolite = socketId < from;
+            const offerCollision = peer.connection.signalingState !== 'stable';
+
+            if (offerCollision && !isPolite) {
+              // Impolite peer ignores incoming collision offer; polite side will process our offer
+              return;
+            }
+
+            if (offerCollision && isPolite) {
+              try {
+                await peer.connection.setLocalDescription({ type: 'rollback' } as any);
+              } catch (e) {
+                // Older browsers without rollback support
+              }
+            }
+
             await peer.connection.setRemoteDescription(new RTCSessionDescription(signal));
 
             // Ensure our local tracks are attached before answering
@@ -119,7 +146,7 @@ export class VoiceManager {
               type: 'answer',
             });
           } else if (type === 'answer') {
-            if (peer.connection.signalingState !== 'stable') {
+            if (peer.connection.signalingState === 'have-local-offer') {
               await peer.connection.setRemoteDescription(new RTCSessionDescription(signal));
             }
           } else if (type === 'ice-candidate') {
@@ -127,12 +154,12 @@ export class VoiceManager {
               try {
                 await peer.connection.addIceCandidate(new RTCIceCandidate(signal));
               } catch (e) {
-                console.warn('Could not add ICE candidate:', e);
+                // Pending candidate or connection established
               }
             }
           }
         } catch (err) {
-          console.warn('Error handling WebRTC signal:', err);
+          console.warn('WebRTC signal handler caught:', err);
         }
       }
     );
@@ -142,45 +169,164 @@ export class VoiceManager {
     });
   }
 
-  public async initLocalAudio(): Promise<boolean> {
+  // Device Enumeration
+  public async getAudioDevices(): Promise<{
+    microphones: AudioDeviceInfo[];
+    speakers: AudioDeviceInfo[];
+  }> {
     try {
-      if (this.localStream && this.localStream.active) {
-        return true;
+      if (!navigator.mediaDevices?.enumerateDevices) {
+        return { microphones: [], speakers: [] };
       }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const microphones: AudioDeviceInfo[] = [];
+      const speakers: AudioDeviceInfo[] = [];
 
-      const stream = await navigator.mediaDevices.getUserMedia({
+      let micIdx = 1;
+      let spkIdx = 1;
+
+      devices.forEach((d) => {
+        if (d.kind === 'audioinput') {
+          microphones.push({
+            deviceId: d.deviceId,
+            label: d.label || `Микрофон ${micIdx++}`,
+            kind: 'audioinput',
+          });
+        } else if (d.kind === 'audiooutput') {
+          speakers.push({
+            deviceId: d.deviceId,
+            label: d.label || `Динамики / Наушники ${spkIdx++}`,
+            kind: 'audiooutput',
+          });
+        }
+      });
+
+      return { microphones, speakers };
+    } catch (err) {
+      console.warn('Error enumerating devices:', err);
+      return { microphones: [], speakers: [] };
+    }
+  }
+
+  public getCurrentDevices() {
+    return {
+      inputDeviceId: this.selectedInputDeviceId,
+      outputDeviceId: this.selectedOutputDeviceId,
+    };
+  }
+
+  public async setAudioInputDevice(deviceId: string): Promise<boolean> {
+    this.selectedInputDeviceId = deviceId;
+    try {
+      const constraints: MediaStreamConstraints = {
         audio: {
+          deviceId: deviceId === 'default' ? undefined : { exact: deviceId },
           echoCancellation: true,
           noiseSuppression: true,
           autoGainControl: true,
         },
         video: false,
+      };
+
+      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
+      const newAudioTrack = newStream.getAudioTracks()[0];
+
+      if (!newAudioTrack) return false;
+
+      // Replace tracks in all peer connections
+      this.peerConnections.forEach((peer) => {
+        const senders = peer.connection.getSenders();
+        const audioSender = senders.find((s) => s.track && s.track.kind === 'audio');
+        if (audioSender) {
+          audioSender.replaceTrack(newAudioTrack).catch(() => {});
+        } else {
+          peer.connection.addTrack(newAudioTrack, newStream);
+        }
       });
 
-      this.localStream = stream;
+      // Stop old tracks
+      if (this.localStream) {
+        this.localStream.getAudioTracks().forEach((t) => t.stop());
+      }
+      this.localStream = newStream;
+      newAudioTrack.enabled = !this.isMuted;
 
-      // Audio analysis for speaking indicator
-      try {
-        const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-        if (!this.audioContext || this.audioContext.state === 'closed') {
-          this.audioContext = new AudioCtx();
-        }
-        if (this.audioContext.state === 'suspended') {
-          this.audioContext.resume().catch(() => {});
-        }
+      // Reconnect analyser
+      this.attachAnalyserToStream(newStream);
 
-        const source = this.audioContext.createMediaStreamSource(stream);
-        this.localAnalyser = this.audioContext.createAnalyser();
-        this.localAnalyser.fftSize = 256;
-        this.localAnalyser.smoothingTimeConstant = 0.4;
-        source.connect(this.localAnalyser);
+      return true;
+    } catch (err) {
+      console.warn('Error switching audio input:', err);
+      return false;
+    }
+  }
 
-        this.startVolumeMonitoring();
-      } catch (e) {
-        console.warn('AudioContext visualization not supported:', e);
+  public async setAudioOutputDevice(deviceId: string): Promise<boolean> {
+    this.selectedOutputDeviceId = deviceId;
+    let success = true;
+
+    this.peerConnections.forEach((peer) => {
+      if (peer.audioElement && typeof (peer.audioElement as any).setSinkId === 'function') {
+        (peer.audioElement as any).setSinkId(deviceId).catch((err: any) => {
+          console.warn('setSinkId error:', err);
+          success = false;
+        });
+      }
+    });
+
+    return success;
+  }
+
+  private attachAnalyserToStream(stream: MediaStream) {
+    try {
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      if (!this.audioContext || this.audioContext.state === 'closed') {
+        this.audioContext = new AudioCtx();
+      }
+      if (this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {});
       }
 
-      // Attach tracks to all existing peer connections and renegotiate
+      const source = this.audioContext.createMediaStreamSource(stream);
+      this.localAnalyser = this.audioContext.createAnalyser();
+      this.localAnalyser.fftSize = 256;
+      this.localAnalyser.smoothingTimeConstant = 0.4;
+      source.connect(this.localAnalyser);
+
+      if (!this.animationFrameId) {
+        this.startVolumeMonitoring();
+      }
+    } catch (e) {
+      console.warn('AudioContext visualization setup warning:', e);
+    }
+  }
+
+  public async initLocalAudio(inputDeviceId?: string): Promise<boolean> {
+    try {
+      if (this.localStream && this.localStream.active && !inputDeviceId) {
+        return true;
+      }
+
+      const devId = inputDeviceId || this.selectedInputDeviceId;
+      const constraints: MediaStreamConstraints = {
+        audio: {
+          deviceId: devId === 'default' ? undefined : { exact: devId },
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
+        video: false,
+      };
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.localStream = stream;
+      stream.getAudioTracks().forEach((track) => {
+        track.enabled = !this.isMuted;
+      });
+
+      this.attachAnalyserToStream(stream);
+
+      // Attach tracks to all existing peer connections and renegotiate if needed
       this.peerConnections.forEach((peer, peerId) => {
         const senders = peer.connection.getSenders();
         stream.getAudioTracks().forEach((track) => {
@@ -189,19 +335,6 @@ export class VoiceManager {
             peer.connection.addTrack(track, stream);
           }
         });
-
-        // Trigger renegotiation offer
-        peer.connection
-          .createOffer({ offerToReceiveAudio: true })
-          .then((offer) => peer.connection.setLocalDescription(offer))
-          .then(() => {
-            getSocket().emit('voice:signal', {
-              to: peerId,
-              signal: peer.connection.localDescription,
-              type: 'offer',
-            });
-          })
-          .catch((err) => console.warn('Renegotiation failed for', peerId, err));
       });
 
       return true;
@@ -217,6 +350,10 @@ export class VoiceManager {
       peer = this.createPeerConnection(peerId);
     }
 
+    if (peer.connection.signalingState !== 'stable') {
+      return;
+    }
+
     peer.connection
       .createOffer({
         offerToReceiveAudio: true,
@@ -229,7 +366,7 @@ export class VoiceManager {
           type: 'offer',
         });
       })
-      .catch((err) => console.warn('Error creating WebRTC offer:', err));
+      .catch((err) => console.warn('Error creating WebRTC offer for peer:', peerId, err));
   }
 
   private createPeerConnection(peerId: string): PeerConnection {
@@ -240,7 +377,7 @@ export class VoiceManager {
     try {
       connection.addTransceiver('audio', { direction: 'sendrecv' });
     } catch (e) {
-      // Older browser fallback
+      // Standard fallback
     }
 
     // Add local tracks if available
@@ -274,6 +411,11 @@ export class VoiceManager {
           audioEl.setAttribute('playsinline', 'true');
           audioEl.setAttribute('data-peer-id', peerId);
 
+          // Apply selected speaker if available
+          if (this.selectedOutputDeviceId !== 'default' && typeof (audioEl as any).setSinkId === 'function') {
+            (audioEl as any).setSinkId(this.selectedOutputDeviceId).catch(() => {});
+          }
+
           const container = this.getOrCreateAudioContainer();
           container.appendChild(audioEl);
           peer.audioElement = audioEl;
@@ -283,10 +425,14 @@ export class VoiceManager {
         audioEl.volume = 1.0;
         audioEl.muted = this.isDeafened;
 
+        if (this.audioContext && this.audioContext.state === 'suspended') {
+          this.audioContext.resume().catch(() => {});
+        }
+
         const playPromise = audioEl.play();
         if (playPromise !== undefined) {
-          playPromise.catch((e) => {
-            console.log('Audio autoplay prevented, awaiting user click:', e);
+          playPromise.catch(() => {
+            // Will play upon next click/gesture
           });
         }
       }
@@ -400,6 +546,7 @@ export class VoiceManager {
   public cleanup() {
     if (this.animationFrameId) {
       cancelAnimationFrame(this.animationFrameId);
+      this.animationFrameId = null;
     }
     if (this.localStream) {
       this.localStream.getTracks().forEach((track) => track.stop());
@@ -412,6 +559,7 @@ export class VoiceManager {
     this.peerConnections.forEach((peer) => {
       if (peer.audioElement) {
         peer.audioElement.pause();
+        peer.audioElement.srcObject = null;
         peer.audioElement.remove();
       }
       peer.connection.close();

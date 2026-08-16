@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Participant, UserRole } from '../../types';
-import { voiceManager } from '../../services/webrtc';
+import { voiceManager, AudioDeviceInfo } from '../../services/webrtc';
 import {
   Mic,
   MicOff,
@@ -12,9 +12,10 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
-  Maximize2,
-  Minimize2,
-  Users,
+  Settings,
+  X,
+  Sliders,
+  Check,
 } from 'lucide-react';
 
 interface VoiceControlsProps {
@@ -38,6 +39,15 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);
   const [micPermissionState, setMicPermissionState] = useState<'prompt' | 'granted' | 'denied'>('prompt');
   const [showMicHelp, setShowMicHelp] = useState(false);
+  const [showDeviceSettings, setShowDeviceSettings] = useState(false);
+
+  // Devices
+  const [microphones, setMicrophones] = useState<AudioDeviceInfo[]>([]);
+  const [speakers, setSpeakers] = useState<AudioDeviceInfo[]>([]);
+  const [selectedMic, setSelectedMic] = useState<string>('default');
+  const [selectedSpeaker, setSelectedSpeaker] = useState<string>('default');
+  const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
+
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
     try {
       return localStorage.getItem(VOICE_COLLAPSED_KEY) === 'true';
@@ -50,6 +60,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
     // Check permission & init voice
     voiceManager.initLocalAudio().then((granted) => {
       setMicPermissionState(granted ? 'granted' : 'denied');
+      loadDevices();
     });
 
     voiceManager.setVolumeCallback((vol) => {
@@ -65,6 +76,33 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
       voiceManager.setSpeakingCallback(() => {});
     };
   }, []);
+
+  const loadDevices = async () => {
+    const { microphones: mics, speakers: spks } = await voiceManager.getAudioDevices();
+    setMicrophones(mics);
+    setSpeakers(spks);
+    const curr = voiceManager.getCurrentDevices();
+    if (curr.inputDeviceId) setSelectedMic(curr.inputDeviceId);
+    if (curr.outputDeviceId) setSelectedSpeaker(curr.outputDeviceId);
+  };
+
+  const handleMicSelect = async (devId: string) => {
+    setSelectedMic(devId);
+    const ok = await voiceManager.setAudioInputDevice(devId);
+    if (ok) {
+      setDeviceNotice('Микрофон успешно переключен');
+      setTimeout(() => setDeviceNotice(null), 2000);
+    }
+  };
+
+  const handleSpeakerSelect = async (devId: string) => {
+    setSelectedSpeaker(devId);
+    const ok = await voiceManager.setAudioOutputDevice(devId);
+    if (ok) {
+      setDeviceNotice('Устройство вывода изменено');
+      setTimeout(() => setDeviceNotice(null), 2000);
+    }
+  };
 
   const toggleCollapsed = () => {
     setIsCollapsed((prev) => {
@@ -89,33 +127,43 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   const handleRetryMic = async () => {
     const success = await voiceManager.initLocalAudio();
     setMicPermissionState(success ? 'granted' : 'denied');
+    if (success) loadDevices();
   };
 
   const participantList = Object.values(participants) as Participant[];
   const activeSpeakingCount = participantList.filter((p) => p.isSpeaking && !p.micMuted).length + (isLocalSpeaking && !isMuted ? 1 : 0);
 
   // ---------------- COLLAPSED MINIMAL VIEW ----------------
+  // Fixed dimensions prevent any jumping/resizing when speaking
   if (isCollapsed) {
     return (
       <div
         id="voice-controls-panel-collapsed"
         className="bg-white/95 backdrop-blur-md shadow-lg border border-slate-200/90 rounded-2xl px-2.5 py-1.5 flex items-center gap-2 text-slate-800 transition-all duration-200"
       >
-        {/* Connection status badge */}
+        {/* Connection status badge with PERMANENT reserved speaking dot space */}
         <button
           type="button"
           onClick={toggleCollapsed}
           title="Развернуть панель голосовой связи"
-          className="flex items-center gap-1.5 px-2 py-1 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 rounded-xl text-xs font-semibold transition cursor-pointer"
+          className="flex items-center gap-2 px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100/80 text-emerald-700 rounded-xl text-xs font-semibold transition cursor-pointer"
         >
           <Radio className="w-3.5 h-3.5 animate-pulse text-emerald-600 shrink-0" />
           <span className="hidden sm:inline">Связь</span>
-          {activeSpeakingCount > 0 && (
-            <span className="flex h-2 w-2 relative">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-            </span>
-          )}
+
+          {/* Reserved fixed space for speaking dot so panel NEVER resizes */}
+          <div className="w-2.5 h-2.5 flex items-center justify-center relative shrink-0">
+            <span
+              className={`animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75 transition-opacity duration-150 ${
+                activeSpeakingCount > 0 ? 'opacity-100' : 'opacity-0'
+              }`}
+            />
+            <span
+              className={`inline-flex rounded-full h-2 w-2 bg-emerald-500 transition-opacity duration-150 ${
+                activeSpeakingCount > 0 ? 'opacity-100' : 'opacity-30'
+              }`}
+            />
+          </div>
         </button>
 
         {/* Quick Mic Mute / Unmute Button */}
@@ -123,7 +171,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
           type="button"
           onClick={handleToggleMute}
           title={isMuted ? 'Включить микрофон (M)' : 'Выключить микрофон (M)'}
-          className={`p-1.5 rounded-xl text-xs font-semibold transition flex items-center justify-center cursor-pointer shadow-2xs ${
+          className={`p-2 w-8 h-8 rounded-xl text-xs font-semibold transition flex items-center justify-center cursor-pointer shadow-2xs shrink-0 ${
             isMuted
               ? 'bg-rose-50 text-rose-700 hover:bg-rose-100 border border-rose-200'
               : isLocalSpeaking
@@ -139,7 +187,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
           type="button"
           onClick={toggleCollapsed}
           title="Развернуть панель"
-          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer flex items-center gap-1"
+          className="p-1.5 text-slate-500 hover:text-slate-800 hover:bg-slate-100 rounded-xl transition cursor-pointer flex items-center justify-center shrink-0"
         >
           <ChevronUp className="w-4 h-4" />
         </button>
@@ -151,7 +199,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   return (
     <div
       id="voice-controls-panel"
-      className="bg-white/95 backdrop-blur-md shadow-xl border border-slate-200/90 rounded-2xl p-2 flex items-center justify-between gap-3 text-slate-800 transition-all duration-200"
+      className="bg-white/95 backdrop-blur-md shadow-xl border border-slate-200/90 rounded-2xl p-2 flex items-center justify-between gap-3 text-slate-800 transition-all duration-200 relative"
     >
       {/* Voice Status & Speaking Participants */}
       <div className="flex items-center gap-2 overflow-x-auto py-0.5 scrollbar-thin">
@@ -160,9 +208,9 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
           <span>Голосовая связь</span>
         </div>
 
-        {/* Self Indicator */}
+        {/* Self Indicator - Fixed layout structure with permanent reserved dot/bar */}
         <div
-          className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-medium transition shrink-0 ${
+          className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs font-medium transition shrink-0 ${
             isLocalSpeaking && !isMuted
               ? 'bg-emerald-100 text-emerald-900 ring-2 ring-emerald-400'
               : isMuted
@@ -170,9 +218,10 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
               : 'bg-slate-100 text-slate-700'
           }`}
         >
-          <div className="relative flex items-center justify-center">
+          {/* Constant dimension status circle */}
+          <div className="w-2.5 h-2.5 relative flex items-center justify-center shrink-0">
             {isLocalSpeaking && !isMuted && (
-              <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-emerald-400 opacity-75" />
+              <span className="animate-ping absolute inline-flex h-3.5 w-3.5 rounded-full bg-emerald-400 opacity-75" />
             )}
             <span
               className={`w-2 h-2 rounded-full ${
@@ -182,9 +231,9 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
           </div>
           <span className="font-semibold">{userName} (Вы)</span>
           {isMuted ? (
-            <MicOff className="w-3 h-3 text-rose-500" />
+            <MicOff className="w-3.5 h-3.5 text-rose-500 shrink-0" />
           ) : (
-            <div className="w-10 h-1.5 bg-slate-200 rounded-full overflow-hidden ml-1">
+            <div className="w-12 h-1.5 bg-slate-200 rounded-full overflow-hidden ml-0.5 shrink-0">
               <div
                 className="h-full bg-emerald-500 transition-all duration-75"
                 style={{ width: `${Math.min(100, localVolume * 1.5)}%` }}
@@ -201,7 +250,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
             return (
               <div
                 key={p.id}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl text-xs font-medium transition shrink-0 ${
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl text-xs font-medium transition shrink-0 ${
                   isPeerSpeaking
                     ? 'bg-emerald-100 text-emerald-900 ring-2 ring-emerald-400'
                     : p.micMuted
@@ -209,9 +258,9 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                     : 'bg-slate-100 text-slate-700'
                 }`}
               >
-                <div className="relative flex items-center justify-center">
+                <div className="w-2.5 h-2.5 relative flex items-center justify-center shrink-0">
                   {isPeerSpeaking && (
-                    <span className="animate-ping absolute inline-flex h-3 w-3 rounded-full bg-emerald-400 opacity-75" />
+                    <span className="animate-ping absolute inline-flex h-3.5 w-3.5 rounded-full bg-emerald-400 opacity-75" />
                   )}
                   <span
                     className={`w-2 h-2 rounded-full ${
@@ -222,7 +271,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
                 <span className="font-medium">
                   {p.name} {p.role === 'tutor' ? '👨‍🏫' : '👨‍🎓'}
                 </span>
-                {p.micMuted && <MicOff className="w-3 h-3 text-rose-400" />}
+                {p.micMuted && <MicOff className="w-3 h-3 text-rose-400 shrink-0" />}
               </div>
             );
           })}
@@ -268,6 +317,20 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
           {isDeafened ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
 
+        {/* Device Settings (Microphone & Speaker Picker) */}
+        <button
+          onClick={() => {
+            setShowDeviceSettings(!showDeviceSettings);
+            if (!showDeviceSettings) loadDevices();
+          }}
+          title="Настройка микрофона и динамиков"
+          className={`p-2 rounded-xl transition cursor-pointer ${
+            showDeviceSettings ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500 hover:text-slate-800'
+          }`}
+        >
+          <Sliders className="w-4 h-4" />
+        </button>
+
         {/* Mic Help Modal Toggle */}
         <button
           onClick={() => setShowMicHelp(!showMicHelp)}
@@ -287,6 +350,85 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
           <ChevronDown className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Audio Devices Modal / Popover */}
+      {showDeviceSettings && (
+        <div className="absolute right-0 bottom-full mb-3 w-80 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200 p-4 z-50 animate-in fade-in">
+          <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
+            <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
+              <Sliders className="w-3.5 h-3.5 text-blue-600" />
+              <span>Настройка звука и устройств</span>
+            </h4>
+            <button
+              onClick={() => setShowDeviceSettings(false)}
+              className="text-slate-400 hover:text-slate-700 p-1 rounded"
+            >
+              <X className="w-3.5 h-3.5" />
+            </button>
+          </div>
+
+          {deviceNotice && (
+            <div className="mb-3 p-2 bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 text-[11px] font-medium flex items-center gap-1.5 animate-in fade-in">
+              <Check className="w-3.5 h-3.5 text-emerald-600" />
+              <span>{deviceNotice}</span>
+            </div>
+          )}
+
+          <div className="space-y-3 text-xs">
+            {/* Microphone Selection */}
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                Микрофон (Вход)
+              </label>
+              <select
+                value={selectedMic}
+                onChange={(e) => handleMicSelect(e.target.value)}
+                className="w-full bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500 transition"
+              >
+                <option value="default">По умолчанию (Системный)</option>
+                {microphones.map((m) => (
+                  <option key={m.deviceId} value={m.deviceId}>
+                    {m.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Speaker Selection */}
+            <div>
+              <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
+                Динамики / Наушники (Выход)
+              </label>
+              <select
+                value={selectedSpeaker}
+                onChange={(e) => handleSpeakerSelect(e.target.value)}
+                className="w-full bg-slate-50 hover:bg-slate-100/80 border border-slate-200 rounded-xl px-2.5 py-2 text-xs text-slate-800 focus:outline-none focus:border-blue-500 transition"
+              >
+                <option value="default">По умолчанию (Системный)</option>
+                {speakers.map((s) => (
+                  <option key={s.deviceId} value={s.deviceId}>
+                    {s.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Mic Live Volume Level Test */}
+            <div className="pt-2 border-t border-slate-100">
+              <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600 mb-1">
+                <span>Проверка уровня микрофона:</span>
+                <span className="font-mono text-emerald-600">{localVolume}%</span>
+              </div>
+              <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200/80 p-0.5">
+                <div
+                  className="h-full bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-500 rounded-full transition-all duration-75"
+                  style={{ width: `${Math.min(100, localVolume * 1.5)}%` }}
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Mic Help Dropdown */}
       {showMicHelp && (

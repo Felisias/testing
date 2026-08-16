@@ -30,6 +30,50 @@ export interface Participant {
   joinedAt: number;
 }
 
+export interface ToolSpecificSettings {
+  pen: {
+    color: string;
+    strokeWidth: number;
+  };
+  highlighter: {
+    color: string;
+    strokeWidth: number;
+  };
+  eraser: {
+    strokeWidth: number;
+  };
+  shapes: {
+    color: string;
+    strokeWidth: number;
+  };
+  text: {
+    color: string;
+    fontSize: number;
+  };
+}
+
+export const DEFAULT_TOOL_SETTINGS: ToolSpecificSettings = {
+  pen: {
+    color: '#1E293B',
+    strokeWidth: 3,
+  },
+  highlighter: {
+    color: '#EAB308',
+    strokeWidth: 20,
+  },
+  eraser: {
+    strokeWidth: 16,
+  },
+  shapes: {
+    color: '#1E293B',
+    strokeWidth: 3,
+  },
+  text: {
+    color: '#1E293B',
+    fontSize: 24,
+  },
+};
+
 export type ToolType =
   | 'select'
   | 'pen'

@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { AVATAR_PRESETS, AvatarOption } from '../../types/avatar';
 import { UserAvatar } from './UserAvatar';
 import { Upload, Sparkles, Palette, Image as ImageIcon } from 'lucide-react';
@@ -202,21 +203,22 @@ export const AvatarPicker: React.FC<AvatarPickerProps> = ({
   );
 
   if (onClose) {
-    return (
-      <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150">
-        <div className="bg-white rounded-3xl p-5 w-full max-w-md shadow-2xl border border-slate-200 animate-in zoom-in-95 duration-150 relative">
+    return createPortal(
+      <div className="fixed inset-0 z-[9999] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-in fade-in duration-150 overflow-y-auto">
+        <div className="bg-white rounded-3xl p-5 w-full max-w-md shadow-2xl border border-slate-200 animate-in zoom-in-95 duration-150 relative my-auto">
           <div className="flex items-center justify-between pb-3 mb-3 border-b border-slate-100">
             <h3 className="text-sm font-bold text-slate-800">Выбор аватара и цвета</h3>
             <button
               onClick={onClose}
-              className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 text-xs font-bold"
+              className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 text-xs font-bold cursor-pointer"
             >
               ✕
             </button>
           </div>
           {content}
         </div>
-      </div>
+      </div>,
+      document.body
     );
   }
 

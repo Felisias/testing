@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { UserRole, UserAccount, SavedBoard } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { AvatarPicker } from '../Common/AvatarPicker';
+import { UsersListModal } from './UsersListModal';
 import {
   GraduationCap,
   Sparkles,
@@ -21,6 +22,7 @@ import {
   Plus,
   Compass,
   Check,
+  Users,
 } from 'lucide-react';
 
 interface AuthModalProps {
@@ -47,14 +49,7 @@ const AVATAR_COLORS = [
   '#4F46E5', // Indigo
 ];
 
-const SUBJECTS = [
-  { id: 'Математика', icon: '📐', short: 'MATH' },
-  { id: 'Физика', icon: '⚡', short: 'PHYS' },
-  { id: 'Информатика', icon: '💻', short: 'CODE' },
-  { id: 'Химия', icon: '🧪', short: 'CHEM' },
-  { id: 'Английский', icon: '🇬🇧', short: 'ENG' },
-  { id: 'Другое', icon: '📚', short: 'LESSON' },
-];
+const ROOM_ICONS = ['🎓', '📐', '💻', '🔬', '📚', '💡', '⚡', '🎨', '🚀', '✍️', '🎯', '🧪', '🧩', '🏆', '🌟', '🧠'];
 
 const STORAGE_KEY = 'tutorboard_user_session';
 const RECENT_ROOMS_KEY = 'tutorboard_recent_rooms';
@@ -91,12 +86,13 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
   // Logged-in Room Action Tab: 'join' | 'create'
   const [roomTab, setRoomTab] = useState<'join' | 'create'>('join');
   const [roomCode, setRoomCode] = useState('');
-  const [selectedSubject, setSelectedSubject] = useState('Математика');
-  const [lessonTitle, setLessonTitle] = useState('Занятие по математике');
+  const [roomIcon, setRoomIcon] = useState('🎓');
+  const [lessonTitle, setLessonTitle] = useState('Урок с преподавателем');
   const [userColor, setUserColor] = useState(AVATAR_COLORS[0]);
 
   // Modals & UI States
   const [showAvatarModal, setShowAvatarModal] = useState(false);
+  const [showUsersModal, setShowUsersModal] = useState(false);
   const [authError, setAuthError] = useState<string | null>(null);
   const [authLoading, setAuthLoading] = useState(false);
   const [copiedNotification, setCopiedNotification] = useState<string | null>(null);
@@ -163,19 +159,17 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     }
   }, []);
 
-  const generateRoomCode = (subj = selectedSubject) => {
-    const found = SUBJECTS.find((s) => s.id === subj);
-    const prefix = found ? found.short : 'LESSON';
+  const generateRoomCode = () => {
     const randomNum = Math.floor(1000 + Math.random() * 9000);
-    return `${prefix}-${randomNum}`;
+    return `ROOM-${randomNum}`;
   };
 
   // Generate initial room code
   useEffect(() => {
     if (roomTab === 'create' && !roomCode) {
-      setRoomCode(generateRoomCode(selectedSubject));
+      setRoomCode(generateRoomCode());
     }
-  }, [roomTab, selectedSubject]);
+  }, [roomTab]);
 
   const saveRoomToHistory = (id: string, title: string, subject: string, role: UserRole) => {
     const entry: SavedBoard = {
@@ -248,18 +242,6 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     }
   };
 
-  // Fast Demo Login
-  const handleQuickDemoLogin = (role: 'tutor' | 'student') => {
-    if (role === 'tutor') {
-      setLoginUsername('tutor');
-      setLoginPassword('123456');
-    } else {
-      setLoginUsername('student');
-      setLoginPassword('123456');
-    }
-    setAuthError(null);
-  };
-
   // Handle Registration
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -271,7 +253,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     }
 
     if (regRole === 'tutor' && regTutorCode.trim() !== TUTOR_SECRET_KEY) {
-      setAuthError('Неверный код доступа преподавателя. Используйте ключ JDH6188');
+      setAuthError('Неверный секретный ключ преподавателя');
       return;
     }
 
@@ -307,10 +289,11 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
   };
 
   // Handle Quick Guest Entry
-  const handleGuestEntry = (e: React.FormEvent) => {
+  const handleGuestEntry = async (e: React.FormEvent) => {
     e.preventDefault();
+    setAuthError(null);
     const name = guestName.trim();
-    let code = guestRoomCode.trim().toUpperCase();
+    const code = guestRoomCode.trim().toUpperCase();
 
     if (!name) {
       setAuthError('Укажите ваше имя');
@@ -318,59 +301,127 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     }
 
     if (!code) {
-      code = generateRoomCode('Математика');
-    }
-
-    saveRoomToHistory(code, `Урок ${code}`, 'Занятие', guestRole);
-
-    onJoinRoom({
-      roomId: code,
-      userName: name,
-      role: guestRole,
-      color: userColor,
-      avatar: guestAvatar,
-      title: `Занятие ${code}`,
-      subject: 'Занятие',
-    });
-  };
-
-  // Handle Logged-In User Join / Create
-  const handleUserRoomSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!currentUser) return;
-
-    let targetCode = roomCode.trim().toUpperCase();
-    if (roomTab === 'create' && !targetCode) {
-      targetCode = generateRoomCode(selectedSubject);
-    }
-
-    if (!targetCode) {
-      setAuthError('Введите код комнаты');
+      setAuthError('Введите код комнаты от преподавателя');
       return;
     }
 
-    const title = roomTab === 'create' ? lessonTitle.trim() || `Занятие по ${selectedSubject}` : `Урок ${targetCode}`;
-    const subject = roomTab === 'create' ? selectedSubject : 'Предмет';
+    setAuthLoading(true);
+    try {
+      const checkRes = await fetch(`/api/rooms/${encodeURIComponent(code)}`);
+      if (!checkRes.ok) {
+        setAuthError(`Комната с кодом "${code}" не найдена. Убедитесь, что преподаватель уже создал комнату и начал занятие.`);
+        setAuthLoading(false);
+        return;
+      }
+
+      saveRoomToHistory(code, `Урок ${code}`, 'Занятие', 'student');
+
+      onJoinRoom({
+        roomId: code,
+        userName: name,
+        role: 'student',
+        color: userColor,
+        avatar: guestAvatar,
+        title: `Занятие ${code}`,
+        subject: 'Занятие',
+      });
+    } catch (err: any) {
+      setAuthError(err.message || 'Ошибка проверки комнаты');
+    } finally {
+      setAuthLoading(false);
+    }
+  };
+
+  // Handle Logged-In User Join / Create
+  const handleUserRoomSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!currentUser) return;
+    setAuthError(null);
+
+    const isStudent = currentUser.role === 'student';
+    let targetCode = roomCode.trim().toUpperCase();
+
+    // Students cannot create rooms
+    if (isStudent || roomTab === 'join') {
+      if (!targetCode) {
+        setAuthError('Введите код комнаты, полученный от преподавателя');
+        return;
+      }
+
+      // Check if room exists
+      setAuthLoading(true);
+      try {
+        const checkRes = await fetch(`/api/rooms/${encodeURIComponent(targetCode)}`);
+        if (!checkRes.ok) {
+          setAuthError(`Комната с кодом "${targetCode}" не существует. Проверьте правильность кода у преподавателя.`);
+          setAuthLoading(false);
+          return;
+        }
+
+        saveRoomToHistory(targetCode, `Урок ${targetCode}`, 'Занятие', currentUser.role);
+
+        onJoinRoom({
+          roomId: targetCode,
+          userName: currentUser.name,
+          role: currentUser.role,
+          color: userColor,
+          avatar: currentUser.avatar || regAvatar,
+          userId: currentUser.id,
+        });
+      } catch (err: any) {
+        setAuthError(err.message || 'Ошибка подключения к комнате');
+      } finally {
+        setAuthLoading(false);
+      }
+      return;
+    }
+
+    // Tutor creating room
+    if (!targetCode) {
+      targetCode = generateRoomCode();
+    }
+
+    const title = `${roomIcon} ${lessonTitle.trim() || 'Урок'}`;
+    const subject = 'Занятие';
 
     saveRoomToHistory(targetCode, title, subject, currentUser.role);
 
     onJoinRoom({
       roomId: targetCode,
       userName: currentUser.name,
-      role: currentUser.role,
+      role: 'tutor',
       color: userColor,
       avatar: currentUser.avatar || regAvatar,
-      title: roomTab === 'create' ? title : undefined,
-      subject: roomTab === 'create' ? subject : undefined,
+      title,
+      subject,
       userId: currentUser.id,
     });
   };
 
   // Join Saved Board
-  const handleOpenSavedBoard = (board: SavedBoard) => {
+  const handleOpenSavedBoard = async (board: SavedBoard) => {
     const role = currentUser ? currentUser.role : board.role || 'student';
     const name = currentUser ? currentUser.name : 'Участник';
     const avatar = currentUser?.avatar || regAvatar;
+
+    setAuthError(null);
+
+    // If student joining, verify room exists
+    if (role === 'student') {
+      setAuthLoading(true);
+      try {
+        const checkRes = await fetch(`/api/rooms/${encodeURIComponent(board.id)}`);
+        if (!checkRes.ok) {
+          setAuthError(`Комната "${board.id}" сейчас недоступна или еще не создана преподавателем.`);
+          setAuthLoading(false);
+          return;
+        }
+      } catch {
+        // Proceed on network edge
+      } finally {
+        setAuthLoading(false);
+      }
+    }
 
     saveRoomToHistory(board.id, board.title, board.subject, role);
 
@@ -448,14 +499,26 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
             </div>
 
             {currentUser && (
-              <button
-                onClick={handleLogout}
-                title="Сменить аккаунт"
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200/80 border border-slate-200/80 rounded-xl text-xs font-medium text-slate-600 hover:text-rose-600 transition"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span>Выйти</span>
-              </button>
+              <div className="flex items-center gap-2">
+                {currentUser.role === 'tutor' && (
+                  <button
+                    onClick={() => setShowUsersModal(true)}
+                    title="Список зарегистрированных пользователей"
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200/80 border border-slate-200 rounded-xl text-xs font-medium text-slate-700 transition cursor-pointer"
+                  >
+                    <Users className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Пользователи</span>
+                  </button>
+                )}
+                <button
+                  onClick={handleLogout}
+                  title="Сменить аккаунт"
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-slate-100 hover:bg-slate-200/80 border border-slate-200/80 rounded-xl text-xs font-medium text-slate-600 hover:text-rose-600 transition cursor-pointer"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                  <span>Выйти</span>
+                </button>
+              </div>
             )}
           </div>
 
@@ -488,7 +551,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                   <button
                     type="button"
                     onClick={() => setShowAvatarModal(true)}
-                    className="text-[11px] text-blue-600 hover:text-blue-700 font-medium transition"
+                    className="text-[11px] text-blue-600 hover:text-blue-700 font-medium transition cursor-pointer"
                   >
                     Сменить аватар
                   </button>
@@ -536,9 +599,9 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                       setAuthMode('login');
                       setAuthError(null);
                     }}
-                    className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
+                    className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                       authMode === 'login'
-                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60'
+                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
                         : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
@@ -552,9 +615,9 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                       setAuthMode('register');
                       setAuthError(null);
                     }}
-                    className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
+                    className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                       authMode === 'register'
-                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60'
+                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
                         : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
@@ -568,9 +631,9 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                       setAuthMode('guest');
                       setAuthError(null);
                     }}
-                    className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
+                    className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                       authMode === 'guest'
-                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60'
+                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
                         : 'text-slate-500 hover:text-slate-800'
                     }`}
                   >
@@ -593,7 +656,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                           required
                           value={loginUsername}
                           onChange={(e) => setLoginUsername(e.target.value)}
-                          placeholder="Например: tutor или ivan"
+                          placeholder="Введите ваш логин"
                           className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl pl-10 pr-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 transition outline-none"
                         />
                       </div>
@@ -621,27 +684,6 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                           className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600"
                         >
                           {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                        </button>
-                      </div>
-                    </div>
-
-                    {/* Quick Demo Logins Bar */}
-                    <div className="pt-1 pb-1 flex items-center justify-between text-[11px] text-slate-500">
-                      <span>Тестовые аккаунты:</span>
-                      <div className="flex items-center gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleQuickDemoLogin('tutor')}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200/80 transition font-medium text-[11px]"
-                        >
-                          👨‍🏫 Репетитор
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleQuickDemoLogin('student')}
-                          className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-700 border border-slate-200/80 transition font-medium text-[11px]"
-                        >
-                          🎓 Ученик
                         </button>
                       </div>
                     </div>
@@ -697,7 +739,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                       <button
                         type="button"
                         onClick={() => setShowAvatarModal(true)}
-                        className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold rounded-lg transition shrink-0 shadow-2xs"
+                        className="px-2.5 py-1 bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 text-[11px] font-semibold rounded-lg transition shrink-0 shadow-2xs cursor-pointer"
                       >
                         Иконка
                       </button>
@@ -714,7 +756,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                           required
                           value={regUsername}
                           onChange={(e) => setRegUsername(e.target.value)}
-                          placeholder="ivan_math"
+                          placeholder="ivan123"
                           className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none"
                         />
                       </div>
@@ -751,7 +793,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                         <button
                           type="button"
                           onClick={() => setRegRole('student')}
-                          className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 ${
+                          className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 cursor-pointer ${
                             regRole === 'student'
                               ? 'bg-blue-50/70 border-blue-500 text-slate-900 ring-1 ring-blue-500/20'
                               : 'bg-slate-50/70 hover:bg-slate-100/70 border-slate-200 text-slate-600'
@@ -767,7 +809,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                         <button
                           type="button"
                           onClick={() => setRegRole('tutor')}
-                          className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 ${
+                          className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 cursor-pointer ${
                             regRole === 'tutor'
                               ? 'bg-blue-50/70 border-blue-500 text-slate-900 ring-1 ring-blue-500/20'
                               : 'bg-slate-50/70 hover:bg-slate-100/70 border-slate-200 text-slate-600'
@@ -782,28 +824,19 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                       </div>
                     </div>
 
-                    {/* Tutor Key Input (If tutor role selected) */}
+                    {/* Tutor Key Input (If tutor role selected - secret key NOT shown in UI) */}
                     {regRole === 'tutor' && (
                       <div className="p-3 bg-amber-50/80 border border-amber-200/90 rounded-2xl space-y-1.5 animate-in fade-in duration-150">
-                        <div className="flex items-center justify-between">
-                          <label className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5">
-                            <ShieldCheck className="w-3.5 h-3.5 text-amber-600" />
-                            <span>Ключ доступа репетитора:</span>
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => setRegTutorCode(TUTOR_SECRET_KEY)}
-                            className="text-[10px] text-amber-700 hover:text-amber-900 hover:underline font-semibold"
-                          >
-                            Вставить JDH6188
-                          </button>
-                        </div>
+                        <label className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5">
+                          <ShieldCheck className="w-3.5 h-3.5 text-amber-600" />
+                          <span>Секретный ключ преподавателя:</span>
+                        </label>
                         <input
-                          type="text"
+                          type="password"
                           value={regTutorCode}
                           onChange={(e) => setRegTutorCode(e.target.value)}
-                          placeholder="Введите код JDH6188"
-                          className="w-full bg-white border border-amber-300 rounded-xl px-3 py-1.5 text-xs font-mono font-bold text-amber-950 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-200"
+                          placeholder="Введите секретный ключ"
+                          className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs font-mono text-amber-950 focus:outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-200"
                         />
                       </div>
                     )}
@@ -844,7 +877,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                         <button
                           type="button"
                           onClick={() => handlePasteClipboard(setGuestRoomCode)}
-                          className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1"
+                          className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 cursor-pointer"
                         >
                           <Clipboard className="w-3 h-3" />
                           <span>Вставить</span>
@@ -854,7 +887,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                         type="text"
                         value={guestRoomCode}
                         onChange={(e) => setGuestRoomCode(e.target.value.toUpperCase())}
-                        placeholder="MATH-2024"
+                        placeholder="ROOM-2024"
                         className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-blue-600 placeholder-slate-400 outline-none uppercase tracking-wider transition"
                       />
                     </div>
@@ -872,37 +905,44 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
             ) : (
               /* ----------------- LOGGED IN USER VIEW ----------------- */
               <div>
-                {/* Mode Tabs: Join vs Create */}
-                <div className="grid grid-cols-2 gap-1 bg-slate-100/90 p-1 rounded-2xl border border-slate-200/70 mb-5">
-                  <button
-                    type="button"
-                    onClick={() => setRoomTab('join')}
-                    className={`py-2 px-3 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
-                      roomTab === 'join'
-                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60'
-                        : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    <KeyRound className="w-3.5 h-3.5" />
-                    <span>Войти по коду</span>
-                  </button>
+                {/* Mode Tabs: Only Tutors can create rooms */}
+                {currentUser.role === 'tutor' ? (
+                  <div className="grid grid-cols-2 gap-1 bg-slate-100/90 p-1 rounded-2xl border border-slate-200/70 mb-5">
+                    <button
+                      type="button"
+                      onClick={() => setRoomTab('join')}
+                      className={`py-2 px-3 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                        roomTab === 'join'
+                          ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <KeyRound className="w-3.5 h-3.5" />
+                      <span>Войти по коду</span>
+                    </button>
 
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setRoomTab('create');
-                      if (!roomCode) setRoomCode(generateRoomCode(selectedSubject));
-                    }}
-                    className={`py-2 px-3 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 ${
-                      roomTab === 'create'
-                        ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60'
-                        : 'text-slate-500 hover:text-slate-800'
-                    }`}
-                  >
-                    <Plus className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Создать урок</span>
-                  </button>
-                </div>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setRoomTab('create');
+                        if (!roomCode) setRoomCode(generateRoomCode());
+                      }}
+                      className={`py-2 px-3 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                        roomTab === 'create'
+                          ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
+                          : 'text-slate-500 hover:text-slate-800'
+                      }`}
+                    >
+                      <Plus className="w-3.5 h-3.5 text-blue-600" />
+                      <span>Создать комнату</span>
+                    </button>
+                  </div>
+                ) : (
+                  <div className="mb-4 text-center">
+                    <div className="text-xs font-bold text-slate-800">Вход на урок по коду</div>
+                    <div className="text-[11px] text-slate-500">Введите код, который вам отправил преподаватель</div>
+                  </div>
+                )}
 
                 <form onSubmit={handleUserRoomSubmit} className="space-y-4">
                   {/* TAB: JOIN ROOM */}
@@ -916,7 +956,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                           <button
                             type="button"
                             onClick={() => handlePasteClipboard(setRoomCode)}
-                            className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1"
+                            className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 cursor-pointer"
                           >
                             <Clipboard className="w-3 h-3" />
                             <span>Вставить из буфера</span>
@@ -927,37 +967,32 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                           required
                           value={roomCode}
                           onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                          placeholder="Например: MATH-7391"
+                          placeholder="Например: ROOM-7391"
                           className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-2xl px-4 py-3 text-sm font-mono font-bold text-blue-600 placeholder-slate-400 outline-none uppercase tracking-widest text-center transition"
                         />
                       </div>
                     </div>
                   ) : (
-                    /* TAB: CREATE ROOM */
+                    /* TAB: CREATE ROOM (No subject tags - room icon + title) */
                     <div className="space-y-3.5">
-                      {/* Subject Chips */}
+                      {/* Room Icon Selector */}
                       <div>
                         <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1.5">
-                          Предмет занятия
+                          Иконка комнаты
                         </label>
-                        <div className="grid grid-cols-3 gap-1.5">
-                          {SUBJECTS.map((subj) => (
+                        <div className="flex flex-wrap gap-1.5 p-2 bg-slate-50 border border-slate-200/80 rounded-2xl max-h-24 overflow-y-auto scrollbar-thin">
+                          {ROOM_ICONS.map((icon) => (
                             <button
-                              key={subj.id}
+                              key={icon}
                               type="button"
-                              onClick={() => {
-                                setSelectedSubject(subj.id);
-                                setLessonTitle(`Занятие по ${subj.id.toLowerCase()}`);
-                                setRoomCode(generateRoomCode(subj.id));
-                              }}
-                              className={`py-2 px-2 rounded-xl border text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                                selectedSubject === subj.id
-                                  ? 'bg-blue-50 border-blue-500 text-blue-700 shadow-2xs font-bold'
-                                  : 'bg-slate-50/70 hover:bg-slate-100 border-slate-200 text-slate-700'
+                              onClick={() => setRoomIcon(icon)}
+                              className={`w-8 h-8 rounded-xl text-base flex items-center justify-center transition transform hover:scale-110 cursor-pointer ${
+                                roomIcon === icon
+                                  ? 'bg-blue-600 text-white shadow-sm ring-2 ring-blue-600/30 scale-105'
+                                  : 'bg-white hover:bg-slate-100 text-slate-800 border border-slate-200/80'
                               }`}
                             >
-                              <span>{subj.icon}</span>
-                              <span className="truncate">{subj.id}</span>
+                              {icon}
                             </button>
                           ))}
                         </div>
@@ -966,13 +1001,13 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                       {/* Lesson Title */}
                       <div>
                         <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                          Название темы / урока
+                          Название комнаты / урока
                         </label>
                         <input
                           type="text"
                           value={lessonTitle}
                           onChange={(e) => setLessonTitle(e.target.value)}
-                          placeholder="Например: Квадратные уравнения и графики"
+                          placeholder="Например: Занятие с репетитором"
                           className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none transition"
                         />
                       </div>
@@ -985,7 +1020,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                           </label>
                           <button
                             type="button"
-                            onClick={() => setRoomCode(generateRoomCode(selectedSubject))}
+                            onClick={() => setRoomCode(generateRoomCode())}
                             className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 cursor-pointer"
                           >
                             <RefreshCw className="w-3 h-3" />
@@ -1004,7 +1039,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
 
                   {/* Marker Color Row */}
                   <div className="flex items-center justify-between pt-1">
-                    <span className="text-[11px] font-semibold text-slate-500">Цвет вашего курсора:</span>
+                    <span className="text-[11px] font-semibold text-slate-500">Цвет вашего маркера:</span>
                     <div className="flex items-center gap-1.5">
                       {AVATAR_COLORS.map((c) => (
                         <button
@@ -1024,7 +1059,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                     type="submit"
                     className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 mt-1 cursor-pointer"
                   >
-                    <span>{roomTab === 'create' ? 'Создать и открыть доску' : 'Присоединиться к уроку'}</span>
+                    <span>{roomTab === 'create' ? 'Создать и открыть комнату' : 'Присоединиться к уроку'}</span>
                     <ArrowRight className="w-4 h-4" />
                   </button>
                 </form>
@@ -1054,8 +1089,6 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                           <span className="font-semibold text-slate-800 truncate">{b.title || 'Урок'}</span>
                         </div>
                         <div className="text-[10px] text-slate-500 flex items-center gap-1.5 mt-0.5">
-                          <span>{b.subject || 'Предмет'}</span>
-                          <span>•</span>
                           <span>{formatDate(b.lastVisited)}</span>
                         </div>
                       </div>
@@ -1084,7 +1117,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
 
         {/* Minimal Footer */}
         <div className="mt-4 text-center text-xs text-slate-400 font-medium">
-          TutorBoard • Совместное обучение с аудиосвязью и редактором кода
+          TutorBoard • Совместное обучение с аудиосвязью и средой разработки
         </div>
       </div>
 
@@ -1098,21 +1131,11 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
         onSelectAvatar={(av, col) => {
           setRegAvatar(av);
           if (col) setUserColor(col);
-          if (currentUser) {
-            const updated = { ...currentUser, avatar: av };
-            setCurrentUser(updated);
-            try {
-              localStorage.setItem(STORAGE_KEY, JSON.stringify({ user: updated, savedBoards }));
-            } catch {}
-            fetch('/api/user/profile/update', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ username: currentUser.username, avatar: av }),
-            }).catch(() => {});
-          }
         }}
-        onSelectColor={(col) => setUserColor(col)}
       />
+
+      {/* Users List Modal for Tutors */}
+      <UsersListModal isOpen={showUsersModal} onClose={() => setShowUsersModal(false)} />
     </div>
   );
 };

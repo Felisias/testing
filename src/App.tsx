@@ -10,6 +10,8 @@ import {
   Participant,
   ChatMessage,
   ImageElement,
+  ToolSpecificSettings,
+  DEFAULT_TOOL_SETTINGS,
 } from './types';
 import { KeybindSettings, DEFAULT_KEYBINDS } from './types/extra';
 import { getSocket, disconnectSocket } from './services/socket';
@@ -29,6 +31,13 @@ import confetti from 'canvas-confetti';
 
 const KEYBINDS_STORAGE_KEY = 'tutorboard_keybinds';
 const STORAGE_KEY = 'tutorboard_user_session';
+
+// Helper to compare two element arrays
+const isSameElementList = (a: WhiteboardElement[], b: WhiteboardElement[]): boolean => {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  return a.every((el, idx) => el.id === b[idx]?.id && el.updatedAt === b[idx]?.updatedAt);
+};
 
 export default function App() {
   // Session & User State
@@ -58,8 +67,36 @@ export default function App() {
 
   // Whiteboard State
   const [tool, setTool] = useState<ToolType>('pen');
-  const [color, setColor] = useState('#1E293B');
-  const [strokeWidth, setStrokeWidth] = useState(4);
+  const [toolSettings, setToolSettings] = useState<ToolSpecificSettings>(() => {
+    try {
+      const saved = localStorage.getItem('tutorboard_tool_settings');
+      if (saved) return { ...DEFAULT_TOOL_SETTINGS, ...JSON.parse(saved) };
+    } catch {}
+    return DEFAULT_TOOL_SETTINGS;
+  });
+
+  const updateToolSetting = useCallback(
+    <K extends keyof ToolSpecificSettings>(
+      toolKey: K,
+      settings: Partial<ToolSpecificSettings[K]>
+    ) => {
+      setToolSettings((prev) => {
+        const updated = {
+          ...prev,
+          [toolKey]: {
+            ...prev[toolKey],
+            ...settings,
+          },
+        };
+        try {
+          localStorage.setItem('tutorboard_tool_settings', JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+    },
+    []
+  );
+
   const [background, setBackground] = useState<BackgroundType>('grid');
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
@@ -97,15 +134,17 @@ export default function App() {
         const currentList = prevPages[activePageIndex] || [];
         const newList = typeof action === 'function' ? action(currentList) : action;
 
-        // Push to undo stack
-        setUndoStack((prevUndo) => {
-          const pageUndo = prevUndo[activePageIndex] || [];
-          return {
-            ...prevUndo,
-            [activePageIndex]: [...pageUndo, currentList].slice(-30),
-          };
-        });
-        setRedoStack((prevRedo) => ({ ...prevRedo, [activePageIndex]: [] }));
+        // Only push to undo stack if elements actually changed
+        if (!isSameElementList(currentList, newList)) {
+          setUndoStack((prevUndo) => {
+            const pageUndo = prevUndo[activePageIndex] || [];
+            return {
+              ...prevUndo,
+              [activePageIndex]: [...pageUndo, currentList].slice(-30),
+            };
+          });
+          setRedoStack((prevRedo) => ({ ...prevRedo, [activePageIndex]: [] }));
+        }
 
         return {
           ...prevPages,
@@ -116,15 +155,23 @@ export default function App() {
     [activePageIndex]
   );
 
-  // Undo / Redo handlers with stable batch sync
+  // Undo / Redo handlers with stable single-click response
   const handleUndo = useCallback(() => {
     setUndoStack((prevUndo) => {
-      const pageUndo = prevUndo[activePageIndex] || [];
+      const pageUndo = [...(prevUndo[activePageIndex] || [])];
       if (pageUndo.length === 0) return prevUndo;
 
-      const previousState = pageUndo[pageUndo.length - 1];
-      const remainingUndo = pageUndo.slice(0, -1);
       const currentList = pages[activePageIndex] || [];
+      let previousState = pageUndo.pop();
+
+      // Skip duplicate consecutive states to guarantee single-click undo
+      while (previousState && isSameElementList(previousState, currentList) && pageUndo.length > 0) {
+        previousState = pageUndo.pop();
+      }
+
+      if (!previousState || isSameElementList(previousState, currentList)) {
+        return prevUndo;
+      }
 
       setRedoStack((prevRedo) => {
         const pageRedo = prevRedo[activePageIndex] || [];
@@ -136,7 +183,7 @@ export default function App() {
 
       setPages((prevPages) => ({
         ...prevPages,
-        [activePageIndex]: previousState,
+        [activePageIndex]: previousState!,
       }));
 
       const socket = getSocket();
@@ -147,19 +194,26 @@ export default function App() {
 
       return {
         ...prevUndo,
-        [activePageIndex]: remainingUndo,
+        [activePageIndex]: pageUndo,
       };
     });
   }, [activePageIndex, pages]);
 
   const handleRedo = useCallback(() => {
     setRedoStack((prevRedo) => {
-      const pageRedo = prevRedo[activePageIndex] || [];
+      const pageRedo = [...(prevRedo[activePageIndex] || [])];
       if (pageRedo.length === 0) return prevRedo;
 
-      const nextState = pageRedo[pageRedo.length - 1];
-      const remainingRedo = pageRedo.slice(0, -1);
       const currentList = pages[activePageIndex] || [];
+      let nextState = pageRedo.pop();
+
+      while (nextState && isSameElementList(nextState, currentList) && pageRedo.length > 0) {
+        nextState = pageRedo.pop();
+      }
+
+      if (!nextState || isSameElementList(nextState, currentList)) {
+        return prevRedo;
+      }
 
       setUndoStack((prevUndo) => {
         const pageUndo = prevUndo[activePageIndex] || [];
@@ -171,7 +225,7 @@ export default function App() {
 
       setPages((prevPages) => ({
         ...prevPages,
-        [activePageIndex]: nextState,
+        [activePageIndex]: nextState!,
       }));
 
       const socket = getSocket();
@@ -182,7 +236,7 @@ export default function App() {
 
       return {
         ...prevRedo,
-        [activePageIndex]: remainingRedo,
+        [activePageIndex]: pageRedo,
       };
     });
   }, [activePageIndex, pages]);
@@ -204,399 +258,306 @@ export default function App() {
     avatar?: string;
     title?: string;
     subject?: string;
+    userId?: string;
   }) => {
-    const socket = getSocket();
-    if (!socket.connected) {
-      socket.connect();
-    }
-
-    const av = targetAvatar || (targetRole === 'tutor' ? '👨‍🏫' : '🎓');
     setRoomId(targetRoomId);
     setUserName(targetName);
     setUserRole(targetRole);
     setUserColor(targetColor);
-    setUserAvatar(av);
+    if (targetAvatar) setUserAvatar(targetAvatar);
+    if (targetTitle) setRoomTitle(targetTitle);
+    if (targetSubject) setSubject(targetSubject);
+    setIsInRoom(true);
+
+    const socket = getSocket();
 
     socket.emit('room:join', {
       roomId: targetRoomId,
       userName: targetName,
       role: targetRole,
       color: targetColor,
-      avatar: av,
+      avatar: targetAvatar || '🎓',
       title: targetTitle,
       subject: targetSubject,
     });
 
-    setIsInRoom(true);
-  };
-
-  // Live avatar selection
-  const handleAvatarChange = (avatar: string, newColor?: string) => {
-    setUserAvatar(avatar);
-    if (newColor) setUserColor(newColor);
-
-    const socket = getSocket();
-    socket.emit('user:profile:update', {
-      avatar,
-      color: newColor || userColor,
+    socket.on('room:error', (err: { error: string }) => {
+      setIsInRoom(false);
+      showToast(`❌ ${err.error || 'Ошибка подключения к комнате'}`);
     });
 
-    // Update stored session if present
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        if (parsed.user) {
-          parsed.user.avatar = avatar;
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
-        }
+    socket.on('room:joined', (data) => {
+      setMyUserId(data.userId || socket.id);
+      setIsLocked(!!data.isLocked);
+      if (data.title) setRoomTitle(data.title);
+      if (data.subject) setSubject(data.subject);
+
+      if (data.boardState) {
+        setPages(data.boardState.pages || { 0: [] });
+        setBackground(data.boardState.background || 'grid');
+        setTotalPages(data.boardState.totalPages || 1);
+        setActivePageIndex(data.boardState.activePageIndex || 0);
       }
-    } catch {}
-  };
-
-  // Socket event listeners
-  useEffect(() => {
-    if (!isInRoom) return;
-    const socket = getSocket();
-
-    socket.on('connect', () => {
-      setMyUserId(socket.id || '');
     });
 
-    socket.on('room:state', ({ room, self }: { room: any; self: Participant }) => {
-      setMyUserId(self.id);
-      setRoomTitle(room.title);
-      setSubject(room.subject);
-      setIsLocked(room.isLocked);
-      setActivePageIndex(room.activePageIndex || 0);
-      setTotalPages(room.totalPages || 1);
-      setBackground(room.background || 'grid');
-      setPages(room.pages || { 0: [] });
-      setParticipants(room.participants || {});
-      setChatMessages(room.chatMessages || []);
-
-      // Automatically initiate WebRTC calls with all existing peers
-      Object.keys(room.participants || {}).forEach((peerId) => {
-        if (peerId !== self.id) {
-          voiceManager.callPeer(peerId);
-        }
+    socket.on('room:participants', (list: Participant[]) => {
+      const map: Record<string, Participant> = {};
+      list.forEach((p) => {
+        map[p.id] = p;
       });
+      setParticipants(map);
     });
 
-    socket.on('participant:joined', (newParticipant: Participant) => {
-      setParticipants((prev) => ({
-        ...prev,
-        [newParticipant.id]: newParticipant,
-      }));
-      // Call newly joined peer for voice
-      voiceManager.callPeer(newParticipant.id);
+    socket.on('room:userJoined', (p: Participant) => {
+      setParticipants((prev) => ({ ...prev, [p.id]: p }));
+      showToast(`${p.name} (${p.role === 'tutor' ? 'Преподаватель' : 'Ученик'}) присоединился к уроку`);
     });
 
-    socket.on('participant:left', ({ userId }: { userId: string }) => {
+    socket.on('room:userLeft', ({ userId, userName: leftName }) => {
       setParticipants((prev) => {
         const next = { ...prev };
         delete next[userId];
         return next;
       });
-      setCursors((prev) => {
-        const next = { ...prev };
-        delete next[userId];
-        return next;
-      });
+      if (leftName) {
+        showToast(`${leftName} покинул занятие`);
+      }
     });
 
-    socket.on('participant:profile:updated', ({ userId, avatar, color }: { userId: string; avatar: string; color?: string }) => {
-      setParticipants((prev) => {
-        if (!prev[userId]) return prev;
+    // Real-time Whiteboard socket events
+    socket.on('board:element:created', ({ element, pageIndex: pIndex }) => {
+      setPages((prev) => {
+        const list = prev[pIndex] || [];
+        if (list.some((el) => el.id === element.id)) return prev;
         return {
           ...prev,
-          [userId]: {
-            ...prev[userId],
-            avatar,
-            color: color || prev[userId].color,
-          },
+          [pIndex]: [...list, element],
         };
       });
     });
 
-    // Whiteboard realtime synchronization
-    socket.on(
-      'board:element:created',
-      ({ element, pageIndex }: { element: WhiteboardElement; pageIndex: number }) => {
-        setPages((prev) => {
-          const pageList = prev[pageIndex] || [];
-          if (pageList.some((el) => el.id === element.id)) return prev;
-          return {
-            ...prev,
-            [pageIndex]: [...pageList, element],
-          };
-        });
-      }
-    );
-
-    socket.on(
-      'board:element:updated',
-      ({ element, pageIndex }: { element: WhiteboardElement; pageIndex: number }) => {
-        setPages((prev) => {
-          const pageList = prev[pageIndex] || [];
-          const idx = pageList.findIndex((el) => el.id === element.id);
-          if (idx === -1) {
-            return { ...prev, [pageIndex]: [...pageList, element] };
-          }
-          const updated = [...pageList];
-          updated[idx] = element;
-          return { ...prev, [pageIndex]: updated };
-        });
-      }
-    );
-
-    socket.on(
-      'board:element:deleted',
-      ({ elementId, pageIndex }: { elementId: string; pageIndex: number }) => {
-        setPages((prev) => {
-          const pageList = prev[pageIndex] || [];
-          return {
-            ...prev,
-            [pageIndex]: pageList.filter((el) => el.id !== elementId),
-          };
-        });
-      }
-    );
-
-    socket.on(
-      'board:elements:deletedBatch',
-      ({ elementIds, pageIndex }: { elementIds: string[]; pageIndex: number }) => {
-        const idsSet = new Set(elementIds);
-        setPages((prev) => {
-          const pageList = prev[pageIndex] || [];
-          return {
-            ...prev,
-            [pageIndex]: pageList.filter((el) => !idsSet.has(el.id)),
-          };
-        });
-      }
-    );
-
-    socket.on(
-      'board:elements:replaced',
-      ({ elements, pageIndex }: { elements: WhiteboardElement[]; pageIndex: number }) => {
-        setPages((prev) => ({
+    socket.on('board:element:updated', ({ element, pageIndex: pIndex }) => {
+      setPages((prev) => {
+        const list = prev[pIndex] || [];
+        return {
           ...prev,
-          [pageIndex]: elements || [],
-        }));
-      }
-    );
+          [pIndex]: list.map((el) => (el.id === element.id ? element : el)),
+        };
+      });
+    });
 
-    socket.on('board:cleared', ({ pageIndex }: { pageIndex: number }) => {
+    socket.on('board:elements:deleted', ({ elementIds, pageIndex: pIndex }) => {
+      const set = new Set(elementIds);
       setPages((prev) => ({
         ...prev,
-        [pageIndex]: [],
+        [pIndex]: (prev[pIndex] || []).filter((el) => !set.has(el.id)),
       }));
     });
 
-    socket.on('board:page:changed', ({ pageIndex }: { pageIndex: number }) => {
-      setActivePageIndex(pageIndex);
+    socket.on('board:elements:replaced', ({ elements: newElements, pageIndex: pIndex }) => {
+      setPages((prev) => ({
+        ...prev,
+        [pIndex]: newElements,
+      }));
     });
 
-    socket.on(
-      'board:page:added',
-      ({ totalPages: newTotal, activePageIndex: newActive }: { totalPages: number; activePageIndex: number }) => {
-        setTotalPages(newTotal);
-        setActivePageIndex(newActive);
-      }
-    );
+    socket.on('board:page:cleared', ({ pageIndex: pIndex }) => {
+      setPages((prev) => ({
+        ...prev,
+        [pIndex]: [],
+      }));
+      showToast(`Страница ${pIndex + 1} очищена`);
+    });
 
-    socket.on('board:background:changed', ({ background: newBg }: { background: BackgroundType }) => {
+    socket.on('board:background:updated', ({ background: newBg }) => {
       setBackground(newBg);
     });
 
-    socket.on('board:lock:changed', ({ isLocked: newLock }: { isLocked: boolean }) => {
-      setIsLocked(newLock);
-      showToast(newLock ? 'Преподаватель заблокировал доску' : 'Преподаватель разрешил рисование');
+    socket.on('board:lock:updated', ({ isLocked: locked }) => {
+      setIsLocked(locked);
+      showToast(locked ? '🔒 Преподаватель заблокировал доску для учеников' : '🔓 Доска открыта для рисования');
     });
 
-    socket.on('cursor:moved', (cursorData: CursorPosition & { pageIndex: number }) => {
-      if (cursorData.pageIndex === activePageIndex) {
+    // Ephemeral multiplayer sockets
+    socket.on('cursor:moved', ({ userId, x, y, userName: cName, userColor: cColor, pageIndex: cPage }) => {
+      if (cPage === activePageIndex) {
         setCursors((prev) => ({
           ...prev,
-          [cursorData.userId]: cursorData,
+          [userId]: {
+            x,
+            y,
+            userName: cName,
+            userColor: cColor,
+            lastActive: Date.now(),
+          },
         }));
       }
     });
 
-    socket.on('board:lasered', (lp: LaserPoint & { pageIndex: number }) => {
-      if (lp.pageIndex === activePageIndex) {
-        setLaserPoints((prev) => [...prev.slice(-40), lp]);
-      }
+    socket.on('laser:pointer', (point: LaserPoint) => {
+      setLaserPoints((prev) => [...prev.slice(-40), point]);
     });
 
-    socket.on('chat:message', (msg: ChatMessage) => {
-      setChatMessages((prev) => [...prev, msg]);
-      if (!isChatOpen && msg.userId !== myUserId && msg.userId !== 'system') {
-        setUnreadChatCount((count) => count + 1);
-      }
-    });
-
-    socket.on(
-      'participant:voice:updated',
-      ({ userId, micMuted, isSpeaking }: { userId: string; micMuted: boolean; isSpeaking: boolean }) => {
-        setParticipants((prev) => {
-          if (!prev[userId]) return prev;
-          return {
-            ...prev,
-            [userId]: {
-              ...prev[userId],
-              micMuted,
-              isSpeaking,
-            },
-          };
-        });
-      }
-    );
-
-    socket.on('tutor:cheered', ({ tutorName, message }: { tutorName: string; message: string }) => {
+    // Tutor superpower events
+    socket.on('tutor:cheered', ({ message }) => {
       confetti({
         particleCount: 120,
-        spread: 90,
+        spread: 80,
         origin: { y: 0.5 },
       });
-      showToast(`🌟 ${tutorName}: ${message}`);
+      showToast(`🌟 ${message || 'Отличная работа!'}`);
     });
 
-    socket.on('tutor:attention:ping', ({ message }: { message: string }) => {
-      showToast(`🔔 ${message}`);
+    socket.on('tutor:attentioned', ({ text }) => {
+      showToast(`🔔 ${text || 'Внимание на доску!'}`);
     });
 
-    return () => {
-      socket.off('connect');
-      socket.off('room:state');
-      socket.off('participant:joined');
-      socket.off('participant:left');
-      socket.off('participant:profile:updated');
-      socket.off('board:element:created');
-      socket.off('board:element:updated');
-      socket.off('board:element:deleted');
-      socket.off('board:elements:deletedBatch');
-      socket.off('board:elements:replaced');
-      socket.off('board:cleared');
-      socket.off('board:page:changed');
-      socket.off('board:page:added');
-      socket.off('board:background:changed');
-      socket.off('board:lock:changed');
-      socket.off('cursor:moved');
-      socket.off('board:lasered');
-      socket.off('chat:message');
-      socket.off('participant:voice:updated');
-      socket.off('tutor:cheered');
-      socket.off('tutor:attention:ping');
-    };
-  }, [isInRoom, activePageIndex, isChatOpen, myUserId]);
-
-  // Clean laser trails older than 1.5s
-  useEffect(() => {
-    const timer = setInterval(() => {
-      const now = Date.now();
-      setLaserPoints((prev) => prev.filter((p) => now - p.timestamp < 1500));
-    }, 200);
-    return () => clearInterval(timer);
-  }, []);
-
-  const showToast = (text: string) => {
-    setNotificationToast(text);
-    setTimeout(() => setNotificationToast(null), 4000);
-  };
-
-  const handlePageChange = (idx: number) => {
-    if (idx >= 0 && idx < totalPages) {
-      setActivePageIndex(idx);
-      getSocket().emit('board:page:change', { pageIndex: idx });
-    }
-  };
-
-  const handleAddPage = () => {
-    getSocket().emit('board:page:add');
-  };
-
-  const handleClearPage = useCallback(() => {
-    setCurrentElements([]);
-    getSocket().emit('board:clear', { pageIndex: activePageIndex });
-  }, [activePageIndex, setCurrentElements]);
-
-  const handleImageUploaded = (imgElem: ImageElement) => {
-    setCurrentElements((prev) => [...prev, imgElem]);
-    getSocket().emit('board:element:create', {
-      element: imgElem,
-      pageIndex: activePageIndex,
+    // Chat socket
+    socket.on('chat:message', (msg: ChatMessage) => {
+      setChatMessages((prev) => [...prev, msg]);
+      if (!isChatOpen) {
+        setUnreadChatCount((prev) => prev + 1);
+      }
     });
   };
 
-  const handleLeaveRoom = () => {
-    disconnectSocket();
-    voiceManager.leave();
-    setIsInRoom(false);
-    setParticipants({});
-    setCursors({});
-    setPages({ 0: [] });
-    setChatMessages([]);
-  };
-
-  const handleSaveKeybinds = (newKeybinds: KeybindSettings) => {
-    setKeybinds(newKeybinds);
-    localStorage.setItem(KEYBINDS_STORAGE_KEY, JSON.stringify(newKeybinds));
-  };
-
-  // Export board as PNG
-  const handleExportPNG = () => {
-    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
-    if (!canvas) return;
-    const link = document.createElement('a');
-    link.download = `${roomTitle || 'tutorboard'}-page-${activePageIndex + 1}.png`;
-    link.href = canvas.toDataURL('image/png');
-    link.click();
-  };
-
-  // Global Keyboard Shortcuts
+  // Keyboard Shortcuts Handler
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      const activeEl = document.activeElement?.tagName?.toLowerCase();
-      if (activeEl === 'input' || activeEl === 'textarea' || activeEl === 'select') {
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        (e.target as HTMLElement).isContentEditable
+      ) {
         return;
       }
 
-      const key = e.key.toLowerCase();
-      const isCtrlOrCmd = e.ctrlKey || e.metaKey;
-
-      if (isCtrlOrCmd && key === 'z' && !e.shiftKey) {
+      // Undo / Redo
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault();
-        handleUndo();
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
         return;
       }
 
-      if (isCtrlOrCmd && (key === 'y' || (key === 'z' && e.shiftKey))) {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
         e.preventDefault();
         handleRedo();
         return;
       }
 
-      if (key === keybinds.pen) setTool('pen');
-      else if (key === keybinds.eraser) setTool('eraser');
-      else if (key === keybinds.highlighter) setTool('highlighter');
-      else if (key === keybinds.laser) setTool('laser');
-      else if (key === keybinds.select) setTool('select');
-      else if (key === keybinds.pan) setTool('pan');
-      else if (key === keybinds.text) setTool('text');
-      else if (key === keybinds.rectangle) setTool('rectangle');
-      else if (key === keybinds.circle) setTool('circle');
-      else if (key === keybinds.line) setTool('line');
-      else if (key === keybinds.arrow) setTool('arrow');
-      else if (key === keybinds.triangle) setTool('triangle');
-      else if (key === keybinds.clear) handleClearPage();
+      // Mute hotkey
+      if (e.key.toLowerCase() === 'm' && !e.ctrlKey && !e.metaKey) {
+        voiceManager.toggleMute();
+        return;
+      }
+
+      // Custom tool keybinds
+      const pressed = e.key.toLowerCase();
+      if (pressed === keybinds.pen) setTool('pen');
+      else if (pressed === keybinds.highlighter) setTool('highlighter');
+      else if (pressed === keybinds.eraser) setTool('eraser');
+      else if (pressed === keybinds.select) setTool('select');
+      else if (pressed === keybinds.pan) setTool('pan');
+      else if (pressed === keybinds.rect) setTool('rect');
+      else if (pressed === keybinds.circle) setTool('circle');
+      else if (pressed === keybinds.line) setTool('line');
+      else if (pressed === keybinds.arrow) setTool('arrow');
+      else if (pressed === keybinds.text) setTool('text');
+      else if (pressed === keybinds.laser) setTool('laser');
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [keybinds, handleUndo, handleRedo, handleClearPage]);
+  }, [keybinds, handleUndo, handleRedo]);
 
+  const showToast = (msg: string) => {
+    setNotificationToast(msg);
+    setTimeout(() => {
+      setNotificationToast(null);
+    }, 4000);
+  };
+
+  const handlePageChange = (index: number) => {
+    setActivePageIndex(index);
+    getSocket().emit('board:page:change', { pageIndex: index });
+  };
+
+  const handleAddPage = () => {
+    const nextIndex = totalPages;
+    setTotalPages((prev) => prev + 1);
+    setActivePageIndex(nextIndex);
+    setPages((prev) => ({ ...prev, [nextIndex]: [] }));
+    getSocket().emit('board:page:add', { pageIndex: nextIndex });
+  };
+
+  const handleClearPage = () => {
+    if (window.confirm('Очистить всю текущую страницу доски?')) {
+      setCurrentElements([]);
+      getSocket().emit('board:page:clear', { pageIndex: activePageIndex });
+    }
+  };
+
+  const handleImageUploaded = (imgEl: ImageElement) => {
+    setCurrentElements((prev) => [...prev, imgEl]);
+    getSocket().emit('board:element:create', { element: imgEl, pageIndex: activePageIndex });
+  };
+
+  const handleExportPNG = () => {
+    const canvas = document.querySelector('canvas') as HTMLCanvasElement;
+    if (!canvas) return;
+    const dataUrl = canvas.toDataURL('image/png');
+    const a = document.createElement('a');
+    a.href = dataUrl;
+    a.download = `tutorboard-${roomTitle || roomId}-page${activePageIndex + 1}.png`;
+    a.click();
+  };
+
+  const handleLeaveRoom = () => {
+    if (window.confirm('Вы уверены, что хотите выйти из комнаты урока?')) {
+      disconnectSocket();
+      voiceManager.cleanup();
+      setIsInRoom(false);
+    }
+  };
+
+  const handleSaveKeybinds = (newBinds: KeybindSettings) => {
+    setKeybinds(newBinds);
+    localStorage.setItem(KEYBINDS_STORAGE_KEY, JSON.stringify(newBinds));
+    showToast('Горячие клавиши успешно сохранены!');
+  };
+
+  const handleAvatarChange = (avatar: string, newColor?: string) => {
+    setUserAvatar(avatar);
+    if (newColor) setUserColor(newColor);
+
+    try {
+      const session = localStorage.getItem(STORAGE_KEY);
+      if (session) {
+        const parsed = JSON.parse(session);
+        if (parsed.user) {
+          parsed.user.avatar = avatar;
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
+          fetch('/api/user/avatar', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: parsed.user.username, avatar }),
+          }).catch(() => {});
+        }
+      }
+    } catch {}
+
+    getSocket().emit('user:avatar:update', {
+      avatar,
+      color: newColor || userColor,
+    });
+    showToast('Аватар обновлен!');
+  };
+
+  // If not logged in or in room, show Auth / Join Modal
   if (!isInRoom) {
     return <JoinModal onJoinRoom={handleJoinRoom} />;
   }
@@ -610,7 +571,7 @@ export default function App() {
       id="tutorboard-app"
       className="flex flex-col h-screen w-screen overflow-hidden bg-slate-950 text-slate-900 font-sans selection:bg-blue-600 selection:text-white"
     >
-      {/* Top Header with Room Code, Timer, IDE toggle & Tutor Controls */}
+      {/* Top Header with Room Code, 2-Button Toggle (Board/IDE), Timer & Tutor Superpowers */}
       <RoomHeader
         roomId={roomId}
         roomTitle={roomTitle}
@@ -622,6 +583,7 @@ export default function App() {
         isLocked={isLocked}
         participants={participants}
         unreadChatCount={unreadChatCount}
+        activeView={activeView}
         onToggleChat={() => {
           setIsChatOpen(!isChatOpen);
           if (!isChatOpen) setUnreadChatCount(0);
@@ -629,7 +591,7 @@ export default function App() {
         onToggleParticipants={() => setIsParticipantsOpen(!isParticipantsOpen)}
         onLeaveRoom={handleLeaveRoom}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenIDE={() => setActiveView(activeView === 'ide' ? 'board' : 'ide')}
+        onSelectView={(view) => setActiveView(view)}
         onOpenAvatarPicker={() => setShowAvatarPicker(true)}
       />
 
@@ -651,8 +613,7 @@ export default function App() {
           <div className="flex-1 relative h-full w-full">
             <Canvas
               tool={tool}
-              color={color}
-              strokeWidth={strokeWidth}
+              toolSettings={toolSettings}
               background={background}
               elements={currentElements}
               setElements={setCurrentElements}
@@ -677,10 +638,8 @@ export default function App() {
               <Toolbar
                 tool={tool}
                 setTool={setTool}
-                color={color}
-                setColor={setColor}
-                strokeWidth={strokeWidth}
-                setStrokeWidth={setStrokeWidth}
+                toolSettings={toolSettings}
+                updateToolSetting={updateToolSetting}
                 background={background}
                 setBackground={setBackground}
                 canEdit={canEdit}

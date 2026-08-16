@@ -11,14 +11,17 @@ import {
   LaserPoint,
   CursorPosition,
   UserRole,
+  ToolSpecificSettings,
+  DEFAULT_TOOL_SETTINGS,
 } from '../../types';
 import { getSocket } from '../../services/socket';
 import { Sparkles, Trash2, Move, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface CanvasProps {
   tool: ToolType;
-  color: string;
-  strokeWidth: number;
+  toolSettings?: ToolSpecificSettings;
+  color?: string;
+  strokeWidth?: number;
   background: BackgroundType;
   elements: WhiteboardElement[];
   setElements: React.Dispatch<React.SetStateAction<WhiteboardElement[]>>;
@@ -40,8 +43,7 @@ interface CanvasProps {
 
 export const Canvas: React.FC<CanvasProps> = ({
   tool,
-  color,
-  strokeWidth,
+  toolSettings = DEFAULT_TOOL_SETTINGS,
   background,
   elements,
   setElements,
@@ -79,6 +81,29 @@ export const Canvas: React.FC<CanvasProps> = ({
   const textInputRef = useRef<HTMLTextAreaElement>(null);
 
   const canEdit = !isLocked || userRole === 'tutor';
+
+  // Compute active tool settings independently
+  const activeColor = (() => {
+    if (tool === 'pen') return toolSettings.pen.color;
+    if (tool === 'highlighter') return toolSettings.highlighter.color;
+    if (['line', 'arrow', 'rect', 'circle', 'triangle', 'coordSystem'].includes(tool)) {
+      return toolSettings.shapes.color;
+    }
+    if (tool === 'text') return toolSettings.text.color;
+    return '#2563EB';
+  })();
+
+  const activeStrokeWidth = (() => {
+    if (tool === 'pen') return toolSettings.pen.strokeWidth;
+    if (tool === 'highlighter') return toolSettings.highlighter.strokeWidth;
+    if (tool === 'eraser') return toolSettings.eraser.strokeWidth;
+    if (['line', 'arrow', 'rect', 'circle', 'triangle', 'coordSystem'].includes(tool)) {
+      return toolSettings.shapes.strokeWidth;
+    }
+    return 2;
+  })();
+
+  const activeFontSize = toolSettings.text.fontSize || 24;
 
   // Handle incoming activeMathInsert into text
   useEffect(() => {
@@ -405,8 +430,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     if (isDrawing && currentStroke.length > 1) {
       ctx.save();
       const isHighlighter = tool === 'highlighter';
-      ctx.strokeStyle = color;
-      ctx.lineWidth = strokeWidth;
+      ctx.strokeStyle = activeColor;
+      ctx.lineWidth = activeStrokeWidth;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
       ctx.globalAlpha = isHighlighter ? 0.4 : 1;
@@ -427,8 +452,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     // Render Current In-Progress Shape
     if (isDrawing && shapeStart && shapeEnd) {
       ctx.save();
-      ctx.strokeStyle = color;
-      ctx.lineWidth = strokeWidth;
+      ctx.strokeStyle = activeColor;
+      ctx.lineWidth = activeStrokeWidth;
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
@@ -460,7 +485,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         const fromY = shapeStart.y;
         const toX = shapeEnd.x;
         const toY = shapeEnd.y;
-        const headlen = Math.max(12, strokeWidth * 3);
+        const headlen = Math.max(12, activeStrokeWidth * 3);
         const angle = Math.atan2(toY - fromY, toX - fromX);
 
         ctx.beginPath();
@@ -524,8 +549,8 @@ export const Canvas: React.FC<CanvasProps> = ({
     panOffset,
     zoom,
     tool,
-    color,
-    strokeWidth,
+    activeColor,
+    activeStrokeWidth,
     selectedElementId,
   ]);
 
@@ -778,6 +803,9 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     // Save pen/highlighter stroke
     if ((tool === 'pen' || tool === 'highlighter') && currentStroke.length > 0) {
+      const strokeColor = tool === 'highlighter' ? toolSettings.highlighter.color : toolSettings.pen.color;
+      const strokeW = tool === 'highlighter' ? toolSettings.highlighter.strokeWidth : toolSettings.pen.strokeWidth;
+
       const newStroke: StrokeElement = {
         id: `el-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
         userId: 'self',
@@ -786,8 +814,8 @@ export const Canvas: React.FC<CanvasProps> = ({
         type: 'stroke',
         tool: tool as 'pen' | 'highlighter',
         points: currentStroke,
-        color,
-        strokeWidth,
+        color: strokeColor,
+        strokeWidth: strokeW,
         opacity: tool === 'highlighter' ? 0.4 : 1,
         createdAt: Date.now(),
         updatedAt: Date.now(),
@@ -824,8 +852,8 @@ export const Canvas: React.FC<CanvasProps> = ({
           y,
           width,
           height,
-          strokeColor: color,
-          strokeWidth,
+          strokeColor: toolSettings.shapes.color,
+          strokeWidth: toolSettings.shapes.strokeWidth,
           createdAt: Date.now(),
           updatedAt: Date.now(),
         };
@@ -840,7 +868,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   };
 
   const eraseAtPoint = (worldPoint: Point) => {
-    const eraserRadius = strokeWidth * 2.5;
+    const eraserRadius = (toolSettings.eraser.strokeWidth || 16) * 2;
     const toDeleteIds: string[] = [];
 
     elements.forEach((el) => {
@@ -888,8 +916,8 @@ export const Canvas: React.FC<CanvasProps> = ({
       x: textInputPos.x,
       y: textInputPos.y,
       text: textInputValue,
-      fontSize: Math.max(18, strokeWidth * 3.5),
-      color,
+      fontSize: activeFontSize,
+      color: toolSettings.text.color,
       createdAt: Date.now(),
       updatedAt: Date.now(),
     };
