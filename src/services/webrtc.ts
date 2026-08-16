@@ -1,9 +1,13 @@
 import { getSocket } from './socket';
 
-interface PeerConnection {
+interface PeerConnectionState {
   peerId: string;
   connection: RTCPeerConnection;
   audioElement?: HTMLAudioElement;
+  pendingCandidates: RTCIceCandidateInit[];
+  makingOffer: boolean;
+  ignoreOffer: boolean;
+  isPolite: boolean;
 }
 
 export interface AudioDeviceInfo {
@@ -16,7 +20,7 @@ export class VoiceManager {
   private localStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private localAnalyser: AnalyserNode | null = null;
-  private peerConnections: Map<string, PeerConnection> = new Map();
+  private peerConnections: Map<string, PeerConnectionState> = new Map();
   private isMuted: boolean = true;
   private isDeafened: boolean = false;
   private animationFrameId: number | null = null;
@@ -30,7 +34,7 @@ export class VoiceManager {
   private selectedInputDeviceId: string = 'default';
   private selectedOutputDeviceId: string = 'default';
 
-  // Reliable free STUN servers
+  // Reliable free STUN servers for robust NAT traversal
   private rtcConfig: RTCConfiguration = {
     iceServers: [
       { urls: 'stun:stun.l.google.com:19302' },
@@ -40,6 +44,7 @@ export class VoiceManager {
       { urls: 'stun:stun4.l.google.com:19302' },
       { urls: 'stun:stun.cloudflare.com:3478' },
       { urls: 'stun:stun.services.mozilla.com:3478' },
+      { urls: 'stun:global.stun.twilio.com:3478' },
     ],
     iceCandidatePoolSize: 10,
   };
@@ -107,12 +112,14 @@ export class VoiceManager {
 
         try {
           if (type === 'offer') {
-            const socketId = socket.id || '';
-            const isPolite = socketId < from;
-            const offerCollision = peer.connection.signalingState !== 'stable';
+            const isPolite = peer.isPolite;
+            const readyForOffer =
+              !peer.makingOffer &&
+              (peer.connection.signalingState === 'stable' || peer.connection.signalingState === 'have-remote-offer');
+            const offerCollision = !readyForOffer;
 
-            if (offerCollision && !isPolite) {
-              // Impolite peer ignores incoming collision offer; polite side will process our offer
+            peer.ignoreOffer = !isPolite && offerCollision;
+            if (peer.ignoreOffer) {
               return;
             }
 
@@ -120,21 +127,34 @@ export class VoiceManager {
               try {
                 await peer.connection.setLocalDescription({ type: 'rollback' } as any);
               } catch (e) {
-                // Older browsers without rollback support
+                // Rollback fallback
               }
             }
 
             await peer.connection.setRemoteDescription(new RTCSessionDescription(signal));
 
-            // Ensure our local tracks are attached before answering
+            // Flush pending ICE candidates
+            while (peer.pendingCandidates.length > 0) {
+              const cand = peer.pendingCandidates.shift();
+              if (cand) {
+                try {
+                  await peer.connection.addIceCandidate(new RTCIceCandidate(cand));
+                } catch (e) {}
+              }
+            }
+
+            // Ensure our local audio track is attached before answering
             if (this.localStream) {
-              const senders = peer.connection.getSenders();
-              this.localStream.getAudioTracks().forEach((track) => {
-                const alreadyAdded = senders.some((s) => s.track === track);
-                if (!alreadyAdded) {
-                  peer!.connection.addTrack(track, this.localStream!);
+              const localTrack = this.localStream.getAudioTracks()[0];
+              if (localTrack) {
+                const senders = peer.connection.getSenders();
+                const audioSender = senders.find((s) => s.track?.kind === 'audio' || !s.track);
+                if (audioSender) {
+                  await audioSender.replaceTrack(localTrack);
+                } else {
+                  peer.connection.addTrack(localTrack, this.localStream);
                 }
-              });
+              }
             }
 
             const answer = await peer.connection.createAnswer();
@@ -142,19 +162,31 @@ export class VoiceManager {
 
             socket.emit('voice:signal', {
               to: from,
-              signal: answer,
+              signal: peer.connection.localDescription,
               type: 'answer',
             });
           } else if (type === 'answer') {
             if (peer.connection.signalingState === 'have-local-offer') {
               await peer.connection.setRemoteDescription(new RTCSessionDescription(signal));
+
+              // Flush pending ICE candidates
+              while (peer.pendingCandidates.length > 0) {
+                const cand = peer.pendingCandidates.shift();
+                if (cand) {
+                  try {
+                    await peer.connection.addIceCandidate(new RTCIceCandidate(cand));
+                  } catch (e) {}
+                }
+              }
             }
           } else if (type === 'ice-candidate') {
             if (signal) {
-              try {
-                await peer.connection.addIceCandidate(new RTCIceCandidate(signal));
-              } catch (e) {
-                // Pending candidate or connection established
+              if (peer.connection.remoteDescription && peer.connection.remoteDescription.type) {
+                try {
+                  await peer.connection.addIceCandidate(new RTCIceCandidate(signal));
+                } catch (e) {}
+              } else {
+                peer.pendingCandidates.push(signal);
               }
             }
           }
@@ -179,9 +211,7 @@ export class VoiceManager {
       if (!Array.isArray(list)) return;
       list.forEach((p) => {
         if (p && p.id && p.id !== myId && !this.peerConnections.has(p.id)) {
-          if (myId && p.id > myId) {
-            this.callPeer(p.id);
-          }
+          this.callPeer(p.id);
         }
       });
     });
@@ -252,11 +282,15 @@ export class VoiceManager {
       if (!newAudioTrack) return false;
 
       // Replace tracks in all peer connections
-      this.peerConnections.forEach((peer) => {
+      this.peerConnections.forEach(async (peer) => {
         const senders = peer.connection.getSenders();
         const audioSender = senders.find((s) => s.track && s.track.kind === 'audio');
         if (audioSender) {
-          audioSender.replaceTrack(newAudioTrack).catch(() => {});
+          try {
+            await audioSender.replaceTrack(newAudioTrack);
+          } catch (e) {
+            peer.connection.addTrack(newAudioTrack, newStream);
+          }
         } else {
           peer.connection.addTrack(newAudioTrack, newStream);
         }
@@ -338,21 +372,33 @@ export class VoiceManager {
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       this.localStream = stream;
-      stream.getAudioTracks().forEach((track) => {
-        track.enabled = !this.isMuted;
-      });
+      const audioTrack = stream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !this.isMuted;
+      }
 
       this.attachAnalyserToStream(stream);
 
       // Attach tracks to all existing peer connections and renegotiate if needed
-      this.peerConnections.forEach((peer, peerId) => {
-        const senders = peer.connection.getSenders();
-        stream.getAudioTracks().forEach((track) => {
-          const alreadyAdded = senders.some((s) => s.track === track);
-          if (!alreadyAdded) {
-            peer.connection.addTrack(track, stream);
+      this.peerConnections.forEach(async (peer, peerId) => {
+        if (audioTrack) {
+          const senders = peer.connection.getSenders();
+          const audioSender = senders.find((s) => s.track?.kind === 'audio' || !s.track);
+          if (audioSender) {
+            try {
+              await audioSender.replaceTrack(audioTrack);
+            } catch (e) {
+              peer.connection.addTrack(audioTrack, stream);
+            }
+          } else {
+            peer.connection.addTrack(audioTrack, stream);
           }
-        });
+        }
+
+        // If connection is stable, ensure offer is updated
+        if (peer.connection.signalingState === 'stable') {
+          this.callPeer(peerId);
+        }
       });
 
       return true;
@@ -362,34 +408,72 @@ export class VoiceManager {
     }
   }
 
-  public callPeer(peerId: string) {
+  public async callPeer(peerId: string) {
     let peer = this.peerConnections.get(peerId);
     if (!peer) {
       peer = this.createPeerConnection(peerId);
     }
 
-    if (peer.connection.signalingState !== 'stable') {
-      return;
-    }
+    try {
+      peer.makingOffer = true;
 
-    peer.connection
-      .createOffer({
+      // Attach local track if available
+      if (this.localStream) {
+        const localTrack = this.localStream.getAudioTracks()[0];
+        if (localTrack) {
+          const senders = peer.connection.getSenders();
+          const audioSender = senders.find((s) => s.track?.kind === 'audio' || !s.track);
+          if (audioSender) {
+            try {
+              await audioSender.replaceTrack(localTrack);
+            } catch (e) {
+              peer.connection.addTrack(localTrack, this.localStream);
+            }
+          } else {
+            peer.connection.addTrack(localTrack, this.localStream);
+          }
+        }
+      }
+
+      if (peer.connection.signalingState !== 'stable') {
+        return;
+      }
+
+      const offer = await peer.connection.createOffer({
         offerToReceiveAudio: true,
-      })
-      .then((offer) => peer!.connection.setLocalDescription(offer))
-      .then(() => {
-        getSocket().emit('voice:signal', {
-          to: peerId,
-          signal: peer!.connection.localDescription,
-          type: 'offer',
-        });
-      })
-      .catch((err) => console.warn('Error creating WebRTC offer for peer:', peerId, err));
+      });
+
+      if (peer.connection.signalingState !== 'stable') {
+        return;
+      }
+
+      await peer.connection.setLocalDescription(offer);
+
+      getSocket().emit('voice:signal', {
+        to: peerId,
+        signal: peer.connection.localDescription,
+        type: 'offer',
+      });
+    } catch (err) {
+      console.warn('Error creating WebRTC offer for peer:', peerId, err);
+    } finally {
+      peer.makingOffer = false;
+    }
   }
 
-  private createPeerConnection(peerId: string): PeerConnection {
+  private createPeerConnection(peerId: string): PeerConnectionState {
     const connection = new RTCPeerConnection(this.rtcConfig);
-    const peer: PeerConnection = { peerId, connection };
+    const socketId = getSocket().id || '';
+    const isPolite = socketId < peerId;
+
+    const peer: PeerConnectionState = {
+      peerId,
+      connection,
+      pendingCandidates: [],
+      makingOffer: false,
+      ignoreOffer: false,
+      isPolite,
+    };
 
     // Request bidirectional audio transceiver
     try {
@@ -401,7 +485,9 @@ export class VoiceManager {
     // Add local tracks if available
     if (this.localStream) {
       this.localStream.getAudioTracks().forEach((track) => {
-        connection.addTrack(track, this.localStream!);
+        try {
+          connection.addTrack(track, this.localStream!);
+        } catch (e) {}
       });
     }
 
@@ -416,43 +502,54 @@ export class VoiceManager {
       }
     };
 
+    // ICE Connection state monitoring
+    connection.oniceconnectionstatechange = () => {
+      if (connection.iceConnectionState === 'failed') {
+        try {
+          if (typeof connection.restartIce === 'function') {
+            connection.restartIce();
+          } else {
+            this.callPeer(peerId);
+          }
+        } catch (e) {}
+      }
+    };
+
     // Remote Audio Stream
     connection.ontrack = (event) => {
-      if (event.streams && event.streams[0]) {
-        const stream = event.streams[0];
-        let audioEl = peer.audioElement;
+      const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
+      let audioEl = peer.audioElement;
 
-        if (!audioEl) {
-          audioEl = document.createElement('audio');
-          audioEl.autoplay = true;
-          audioEl.muted = this.isDeafened;
-          audioEl.setAttribute('playsinline', 'true');
-          audioEl.setAttribute('data-peer-id', peerId);
-
-          // Apply selected speaker if available
-          if (this.selectedOutputDeviceId !== 'default' && typeof (audioEl as any).setSinkId === 'function') {
-            (audioEl as any).setSinkId(this.selectedOutputDeviceId).catch(() => {});
-          }
-
-          const container = this.getOrCreateAudioContainer();
-          container.appendChild(audioEl);
-          peer.audioElement = audioEl;
-        }
-
-        audioEl.srcObject = stream;
-        audioEl.volume = 1.0;
+      if (!audioEl) {
+        audioEl = document.createElement('audio');
+        audioEl.autoplay = true;
         audioEl.muted = this.isDeafened;
+        audioEl.setAttribute('playsinline', 'true');
+        audioEl.setAttribute('data-peer-id', peerId);
 
-        if (this.audioContext && this.audioContext.state === 'suspended') {
-          this.audioContext.resume().catch(() => {});
+        // Apply selected speaker if available
+        if (this.selectedOutputDeviceId !== 'default' && typeof (audioEl as any).setSinkId === 'function') {
+          (audioEl as any).setSinkId(this.selectedOutputDeviceId).catch(() => {});
         }
 
-        const playPromise = audioEl.play();
-        if (playPromise !== undefined) {
-          playPromise.catch(() => {
-            // Will play upon next click/gesture
-          });
-        }
+        const container = this.getOrCreateAudioContainer();
+        container.appendChild(audioEl);
+        peer.audioElement = audioEl;
+      }
+
+      audioEl.srcObject = stream;
+      audioEl.volume = 1.0;
+      audioEl.muted = this.isDeafened;
+
+      if (this.audioContext && this.audioContext.state === 'suspended') {
+        this.audioContext.resume().catch(() => {});
+      }
+
+      const playPromise = audioEl.play();
+      if (playPromise !== undefined) {
+        playPromise.catch(() => {
+          // Playback will resume upon user gesture
+        });
       }
     };
 
