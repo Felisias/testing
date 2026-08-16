@@ -441,8 +441,11 @@ export default function App() {
         return;
       }
 
-      // Undo / Redo
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      // Undo / Redo (supporting both English and Russian keyboard layouts)
+      const isZ = e.code === 'KeyZ' || e.key.toLowerCase() === 'z' || e.key === 'я' || e.key === 'Я';
+      const isY = e.code === 'KeyY' || e.key.toLowerCase() === 'y' || e.key === 'н' || e.key === 'Н';
+
+      if ((e.ctrlKey || e.metaKey) && isZ) {
         e.preventDefault();
         if (e.shiftKey) {
           handleRedo();
@@ -452,7 +455,7 @@ export default function App() {
         return;
       }
 
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+      if ((e.ctrlKey || e.metaKey) && isY) {
         e.preventDefault();
         handleRedo();
         return;
@@ -539,8 +542,17 @@ export default function App() {
     showToast('Горячие клавиши успешно сохранены!');
   };
 
-  const handleAvatarChange = (avatar: string, newColor?: string) => {
-    setUserAvatar(avatar);
+  const handleSaveProfile = ({
+    userName: newName,
+    avatar: newAvatar,
+    color: newColor,
+  }: {
+    userName: string;
+    avatar: string;
+    color: string;
+  }) => {
+    if (newName) setUserName(newName);
+    if (newAvatar) setUserAvatar(newAvatar);
     if (newColor) setUserColor(newColor);
 
     try {
@@ -548,22 +560,32 @@ export default function App() {
       if (session) {
         const parsed = JSON.parse(session);
         if (parsed.user) {
-          parsed.user.avatar = avatar;
+          if (newName) parsed.user.name = newName;
+          if (newAvatar) parsed.user.avatar = newAvatar;
           localStorage.setItem(STORAGE_KEY, JSON.stringify(parsed));
           fetch('/api/user/avatar', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ username: parsed.user.username, avatar }),
+            body: JSON.stringify({ username: parsed.user.username, avatar: newAvatar, name: newName }),
           }).catch(() => {});
         }
       }
     } catch {}
 
-    getSocket().emit('user:avatar:update', {
+    getSocket().emit('user:profile:update', {
+      userName: newName,
+      avatar: newAvatar,
+      color: newColor,
+    });
+    showToast('✅ Профиль успешно обновлен!');
+  };
+
+  const handleAvatarChange = (avatar: string, newColor?: string) => {
+    handleSaveProfile({
+      userName,
       avatar,
       color: newColor || userColor,
     });
-    showToast('Аватар обновлен!');
   };
 
   // If not logged in or in room, show Auth / Join Modal
@@ -606,7 +628,8 @@ export default function App() {
 
       {/* Main Workspace Area (Whiteboard OR Collaborative IDE) */}
       <div className="flex-1 relative flex overflow-hidden">
-        {activeView === 'ide' ? (
+        {/* Collaborative Code IDE */}
+        <div className={`flex-1 relative h-full w-full ${activeView === 'ide' ? 'flex flex-col' : 'hidden'}`}>
           <CodeIDE
             roomId={roomId}
             myUserId={myUserId}
@@ -617,93 +640,93 @@ export default function App() {
             participants={participants}
             onBackToBoard={() => setActiveView('board')}
           />
-        ) : (
-          /* Central Whiteboard Canvas */
-          <div className="flex-1 relative h-full w-full">
-            <Canvas
+        </div>
+
+        {/* Central Whiteboard Canvas */}
+        <div className={`flex-1 relative h-full w-full ${activeView === 'board' ? 'block' : 'hidden'}`}>
+          <Canvas
+            tool={tool}
+            toolSettings={toolSettings}
+            background={background}
+            elements={currentElements}
+            setElements={setCurrentElements}
+            pageIndex={activePageIndex}
+            isLocked={isLocked}
+            userRole={userRole}
+            userName={userName}
+            userColor={userColor}
+            zoom={zoom}
+            setZoom={setZoom}
+            panOffset={panOffset}
+            setPanOffset={setPanOffset}
+            cursors={cursors}
+            laserPoints={laserPoints}
+            addLaserPoint={(lp) => setLaserPoints((prev) => [...prev.slice(-40), lp])}
+            activeMathInsert={activeMathInsert}
+            onMathInserted={() => setActiveMathInsert(undefined)}
+          />
+
+          {/* Vertical Toolbar Docked at Left Border */}
+          <div className="absolute top-4 left-3 z-40">
+            <Toolbar
               tool={tool}
+              setTool={setTool}
               toolSettings={toolSettings}
+              updateToolSetting={updateToolSetting}
               background={background}
-              elements={currentElements}
-              setElements={setCurrentElements}
-              pageIndex={activePageIndex}
-              isLocked={isLocked}
+              setBackground={setBackground}
+              canEdit={canEdit}
               userRole={userRole}
               userName={userName}
               userColor={userColor}
-              zoom={zoom}
-              setZoom={setZoom}
-              panOffset={panOffset}
-              setPanOffset={setPanOffset}
-              cursors={cursors}
-              laserPoints={laserPoints}
-              addLaserPoint={(lp) => setLaserPoints((prev) => [...prev.slice(-40), lp])}
-              activeMathInsert={activeMathInsert}
-              onMathInserted={() => setActiveMathInsert(undefined)}
+              pageIndex={activePageIndex}
+              totalPages={totalPages}
+              onPageChange={handlePageChange}
+              onAddPage={handleAddPage}
+              onClearPage={handleClearPage}
+              canUndo={canUndo}
+              canRedo={canRedo}
+              onUndo={handleUndo}
+              onRedo={handleRedo}
+              onImageUploaded={handleImageUploaded}
+              onExport={handleExportPNG}
+              onToggleMath={() => setIsMathOpen(!isMathOpen)}
+              isMathOpen={isMathOpen}
             />
-
-            {/* Vertical Toolbar Docked at Left Border */}
-            <div className="absolute top-4 left-3 z-40">
-              <Toolbar
-                tool={tool}
-                setTool={setTool}
-                toolSettings={toolSettings}
-                updateToolSetting={updateToolSetting}
-                background={background}
-                setBackground={setBackground}
-                canEdit={canEdit}
-                userRole={userRole}
-                userName={userName}
-                userColor={userColor}
-                pageIndex={activePageIndex}
-                totalPages={totalPages}
-                onPageChange={handlePageChange}
-                onAddPage={handleAddPage}
-                onClearPage={handleClearPage}
-                canUndo={canUndo}
-                canRedo={canRedo}
-                onUndo={handleUndo}
-                onRedo={handleRedo}
-                onImageUploaded={handleImageUploaded}
-                onExport={handleExportPNG}
-                onToggleMath={() => setIsMathOpen(!isMathOpen)}
-                isMathOpen={isMathOpen}
-              />
-            </div>
-
-            {/* Floating Math Symbols Drawer at Left (opens next to toolbar) */}
-            {isMathOpen && (
-              <div className="absolute top-4 left-16 z-40">
-                <MathToolbar
-                  isOpen={isMathOpen}
-                  onToggle={() => setIsMathOpen(!isMathOpen)}
-                  onInsertSymbol={(sym) => {
-                    setActiveMathInsert(sym);
-                    setTool('text');
-                    showToast(`Символ ${sym} готов к вставке в текст`);
-                  }}
-                />
-              </div>
-            )}
-
-            {/* Floating Bottom Voice Controls Bar */}
-            <div className="absolute bottom-4 left-16 z-30 max-w-[calc(100%-160px)]">
-              <VoiceControls
-                participants={participants}
-                currentUserId={myUserId}
-                userRole={userRole}
-                userName={userName}
-              />
-            </div>
-
-            {/* Toast Notifications */}
-            {notificationToast && (
-              <div className="absolute top-4 right-4 z-50 bg-slate-900/90 backdrop-blur text-white px-4 py-2.5 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-top-4 border border-slate-700">
-                <span>{notificationToast}</span>
-              </div>
-            )}
           </div>
-        )}
+
+          {/* Floating Math Symbols Drawer at Left (opens next to toolbar) */}
+          {isMathOpen && (
+            <div className="absolute top-4 left-16 z-40">
+              <MathToolbar
+                isOpen={isMathOpen}
+                onToggle={() => setIsMathOpen(!isMathOpen)}
+                onInsertSymbol={(sym) => {
+                  setActiveMathInsert(sym);
+                  setTool('text');
+                  showToast(`Символ ${sym} готов к вставке в текст`);
+                }}
+              />
+            </div>
+          )}
+
+          {/* Floating Bottom Voice Controls Bar */}
+          <div className="absolute bottom-4 left-16 z-30 max-w-[calc(100%-160px)]">
+            <VoiceControls
+              participants={participants}
+              currentUserId={myUserId}
+              userRole={userRole}
+              userName={userName}
+            />
+          </div>
+
+          {/* Toast Notifications */}
+          {notificationToast && (
+            <div className="absolute top-4 right-4 z-50 bg-slate-900/90 backdrop-blur text-white px-4 py-2.5 rounded-2xl shadow-2xl text-xs font-semibold flex items-center gap-2 animate-in slide-in-from-top-4 border border-slate-700">
+              <span>{notificationToast}</span>
+            </div>
+          )}
+        </div>
 
         {/* Real-time Text Chat Drawer */}
         <ChatDrawer
@@ -735,14 +758,16 @@ export default function App() {
           onSaveKeybinds={handleSaveKeybinds}
         />
 
-        {/* Avatar Picker Modal */}
+        {/* Profile & Avatar Customization Modal */}
         <AvatarPicker
           isOpen={showAvatarPicker}
           onClose={() => setShowAvatarPicker(false)}
           selectedAvatar={userAvatar}
           selectedColor={userColor}
           userName={userName}
+          userRole={userRole}
           onSelectAvatar={handleAvatarChange}
+          onSaveProfile={handleSaveProfile}
         />
       </div>
     </div>

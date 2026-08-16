@@ -17,7 +17,7 @@ export class VoiceManager {
   private audioContext: AudioContext | null = null;
   private localAnalyser: AnalyserNode | null = null;
   private peerConnections: Map<string, PeerConnection> = new Map();
-  private isMuted: boolean = false;
+  private isMuted: boolean = true;
   private isDeafened: boolean = false;
   private animationFrameId: number | null = null;
   private onVolumeChangeCallback: ((volume: number) => void) | null = null;
@@ -479,6 +479,14 @@ export class VoiceManager {
     };
 
     checkVolume();
+  }
+
+  public getIsMuted(): boolean {
+    return this.isMuted;
+  }
+
+  public getIsDeafened(): boolean {
+    return this.isDeafened;
   }
 
   public toggleMute(): boolean {

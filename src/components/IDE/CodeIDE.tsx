@@ -15,6 +15,7 @@ import { getSocket } from '../../services/socket';
 import { CodeFile, CodeCursor } from '../../types/extra';
 import { Participant } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
+import { voiceManager } from '../../services/webrtc';
 import {
   Code2,
   Play,
@@ -29,6 +30,13 @@ import {
   FilePlus2,
   FileText,
   Sparkles,
+  ExternalLink,
+  GripHorizontal,
+  Maximize2,
+  Minimize2,
+  ArrowUpRight,
+  Mic,
+  MicOff,
 } from 'lucide-react';
 
 interface CodeIDEProps {
@@ -108,15 +116,324 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   participants = {},
   onBackToBoard,
 }) => {
-  const [files, setFiles] = useState<CodeFile[]>(DEFAULT_FILES);
-  const [activeFileId, setActiveFileId] = useState<string>('main-py');
-  const [output, setOutput] = useState<string>('');
+  const [files, setFiles] = useState<CodeFile[]>(() => {
+    try {
+      const saved = localStorage.getItem(`tutorboard_ide_files_${roomId}`);
+      return saved ? JSON.parse(saved) : DEFAULT_FILES;
+    } catch {
+      return DEFAULT_FILES;
+    }
+  });
+  const [activeFileId, setActiveFileId] = useState<string>(() => {
+    try {
+      const saved = localStorage.getItem(`tutorboard_ide_active_file_${roomId}`);
+      return saved || 'main-py';
+    } catch {
+      return 'main-py';
+    }
+  });
+  const [output, setOutput] = useState<string>(() => {
+    try {
+      return localStorage.getItem(`tutorboard_ide_output_${roomId}`) || '';
+    } catch {
+      return '';
+    }
+  });
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [otherCursors, setOtherCursors] = useState<Record<string, CodeCursor>>({});
   const [newFileName, setNewFileName] = useState<string>('');
   const [newFileLang, setNewFileLang] = useState<string>('python');
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
+
+  // Microphone state
+  const [isMicMuted, setIsMicMuted] = useState<boolean>(() => voiceManager.getIsMuted());
+  const [isSpeaking, setIsSpeaking] = useState<boolean>(false);
+
+  // Sync microphone state and speaking status
+  useEffect(() => {
+    const syncMute = () => {
+      setIsMicMuted(voiceManager.getIsMuted());
+    };
+    syncMute();
+    const interval = setInterval(syncMute, 400);
+
+    voiceManager.setSpeakingCallback((speaking) => {
+      setIsSpeaking(speaking);
+    });
+
+    return () => {
+      clearInterval(interval);
+    };
+  }, []);
+
+  const handleToggleMic = () => {
+    const nextMuted = voiceManager.toggleMute();
+    setIsMicMuted(nextMuted);
+  };
+
+  // Persist files, activeFileId, and output
+  useEffect(() => {
+    try {
+      localStorage.setItem(`tutorboard_ide_files_${roomId}`, JSON.stringify(files));
+    } catch {}
+  }, [files, roomId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`tutorboard_ide_active_file_${roomId}`, activeFileId);
+    } catch {}
+  }, [activeFileId, roomId]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(`tutorboard_ide_output_${roomId}`, output);
+    } catch {}
+  }, [output, roomId]);
+
+  // Terminal Resizing & Popout Window states
+  const [terminalHeight, setTerminalHeight] = useState<number>(() => {
+    try {
+      const saved = localStorage.getItem('tutorboard_terminal_height');
+      return saved ? Math.max(70, Math.min(600, parseInt(saved, 10))) : 190;
+    } catch {
+      return 190;
+    }
+  });
+  const [isResizingTerminal, setIsResizingTerminal] = useState<boolean>(false);
+  const [isTerminalPoppedOut, setIsTerminalPoppedOut] = useState<boolean>(false);
+  const popoutWindowRef = useRef<Window | null>(null);
+  const resizeStartYRef = useRef<number>(0);
+  const resizeStartHeightRef = useRef<number>(190);
+
+  // Sync output to popout window
+  useEffect(() => {
+    if (isTerminalPoppedOut && popoutWindowRef.current && !popoutWindowRef.current.closed) {
+      const doc = popoutWindowRef.current.document;
+      const el = doc.getElementById('output-box');
+      if (el) {
+        if (output) {
+          el.className = 'content';
+          el.textContent = output;
+        } else {
+          el.className = 'content empty';
+          el.textContent = 'Терминал пуст. Нажмите «Запустить» или Ctrl+Enter в IDE...';
+        }
+        el.scrollTop = el.scrollHeight;
+      }
+    }
+  }, [output, isTerminalPoppedOut]);
+
+  // Clean up popout window on unmount
+  useEffect(() => {
+    return () => {
+      if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
+        popoutWindowRef.current.close();
+      }
+    };
+  }, []);
+
+  // Handle Drag to Resize Terminal
+  const handleStartResize = (e: React.PointerEvent) => {
+    e.preventDefault();
+    setIsResizingTerminal(true);
+    resizeStartYRef.current = e.clientY;
+    resizeStartHeightRef.current = terminalHeight;
+
+    const handlePointerMove = (moveEvent: PointerEvent) => {
+      const deltaY = resizeStartYRef.current - moveEvent.clientY;
+      const nextHeight = Math.max(55, Math.min(window.innerHeight - 160, resizeStartHeightRef.current + deltaY));
+      setTerminalHeight(nextHeight);
+      try {
+        localStorage.setItem('tutorboard_terminal_height', nextHeight.toString());
+      } catch {}
+    };
+
+    const handlePointerUp = () => {
+      setIsResizingTerminal(false);
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+  };
+
+  // Handle Popout Window (multi-monitor support)
+  const handleTogglePopoutTerminal = () => {
+    if (isTerminalPoppedOut) {
+      if (popoutWindowRef.current && !popoutWindowRef.current.closed) {
+        popoutWindowRef.current.close();
+      }
+      setIsTerminalPoppedOut(false);
+      return;
+    }
+
+    const width = 850;
+    const height = 550;
+    const left = window.screenX + 60;
+    const top = window.screenY + 60;
+
+    const popout = window.open(
+      '',
+      `tutorboard_terminal_${roomId}`,
+      `width=${width},height=${height},left=${left},top=${top},menubar=no,toolbar=no,location=no,status=no,resizable=yes`
+    );
+
+    if (!popout) {
+      alert('Всплывающее окно заблокировано браузером. Разрешите всплывающие окна в настройках браузера, чтобы вынести консоль на второй монитор.');
+      return;
+    }
+
+    popoutWindowRef.current = popout;
+    setIsTerminalPoppedOut(true);
+
+    popout.document.title = `TutorBoard — Терминал [${roomId}]`;
+    popout.document.head.innerHTML = `
+      <meta charset="UTF-8">
+      <title>TutorBoard IDE Terminal</title>
+      <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body {
+          background-color: #090d13;
+          color: #34d399;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+          font-size: 13px;
+          height: 100vh;
+          display: flex;
+          flex-direction: column;
+          overflow: hidden;
+        }
+        .header {
+          background-color: #020617;
+          padding: 10px 16px;
+          border-bottom: 1px solid #1e293b;
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          user-select: none;
+        }
+        .title {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          color: #f1f5f9;
+          font-weight: 700;
+          font-size: 13px;
+        }
+        .badge {
+          background-color: #064e3b;
+          color: #6ee7b7;
+          padding: 2px 8px;
+          border-radius: 9999px;
+          font-size: 11px;
+          font-weight: 600;
+          border: 1px solid #047857;
+        }
+        .actions {
+          display: flex;
+          gap: 8px;
+        }
+        button {
+          background-color: #1e293b;
+          color: #cbd5e1;
+          border: 1px solid #334155;
+          padding: 5px 12px;
+          border-radius: 8px;
+          cursor: pointer;
+          font-size: 11px;
+          font-weight: 600;
+          font-family: inherit;
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          transition: all 0.15s ease;
+        }
+        button:hover {
+          background-color: #334155;
+          color: #ffffff;
+        }
+        button.primary {
+          background-color: #2563eb;
+          color: white;
+          border-color: #3b82f6;
+        }
+        button.primary:hover {
+          background-color: #1d4ed8;
+        }
+        .content {
+          flex: 1;
+          padding: 16px;
+          overflow-y: auto;
+          white-space: pre-wrap;
+          word-break: break-word;
+          line-height: 1.6;
+        }
+        .empty {
+          color: #475569;
+          font-style: italic;
+        }
+      </style>
+    `;
+
+    popout.document.body.innerHTML = `
+      <div class="header">
+        <div class="title">
+          <span>💻</span>
+          <span>TutorBoard Терминал</span>
+          <span class="badge">Второе окно / монитор</span>
+        </div>
+        <div class="actions">
+          <button id="btn-copy">📋 Копировать</button>
+          <button id="btn-clear">🔄 Очистить</button>
+          <button id="btn-dock" class="primary">📥 Прикрепить к IDE</button>
+        </div>
+      </div>
+      <div class="content" id="output-box"></div>
+    `;
+
+    const el = popout.document.getElementById('output-box');
+    if (el) {
+      if (output) {
+        el.className = 'content';
+        el.textContent = output;
+      } else {
+        el.className = 'content empty';
+        el.textContent = 'Терминал пуст. Нажмите «Запустить» в IDE...';
+      }
+    }
+
+    popout.document.getElementById('btn-clear')?.addEventListener('click', () => {
+      setOutput('');
+      const box = popout.document.getElementById('output-box');
+      if (box) {
+        box.className = 'content empty';
+        box.textContent = 'Терминал пуст. Нажмите «Запустить» в IDE...';
+      }
+    });
+
+    popout.document.getElementById('btn-copy')?.addEventListener('click', () => {
+      if (output) {
+        popout.navigator.clipboard?.writeText(output);
+        const btn = popout.document.getElementById('btn-copy');
+        if (btn) {
+          btn.textContent = '✓ Скопировано!';
+          setTimeout(() => {
+            if (btn) btn.textContent = '📋 Копировать';
+          }, 1500);
+        }
+      }
+    });
+
+    popout.document.getElementById('btn-dock')?.addEventListener('click', () => {
+      popout.close();
+      setIsTerminalPoppedOut(false);
+    });
+
+    popout.onbeforeunload = () => {
+      setIsTerminalPoppedOut(false);
+    };
+  };
 
   // Exact character width measurement for cursor placement
   const [charWidth, setCharWidth] = useState<number>(7.8);
@@ -586,9 +903,48 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
             })}
           </div>
 
-          {/* Quick shortcut info */}
-          <div className="p-2 border-t border-slate-900 text-[10px] text-slate-500 text-center font-mono">
-            Ctrl+Enter — запуск
+          {/* Left Sidebar Footer: Microphone Toggle Button + Quick shortcut info */}
+          <div className="p-2 border-t border-slate-900 flex flex-col gap-2 bg-slate-950/80">
+            <button
+              onClick={handleToggleMic}
+              title={isMicMuted ? 'Включить микрофон' : 'Заглушить микрофон'}
+              className={`w-full py-2 px-2.5 rounded-xl text-xs font-medium flex items-center justify-between transition cursor-pointer border ${
+                isMicMuted
+                  ? 'bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border-rose-800/50'
+                  : 'bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-300 border-emerald-700/60'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <div
+                  className={`w-6 h-6 rounded-lg flex items-center justify-center transition ${
+                    isMicMuted
+                      ? 'bg-rose-900/70 text-rose-200'
+                      : isSpeaking
+                      ? 'bg-emerald-500 text-white animate-pulse shadow-sm shadow-emerald-500/50'
+                      : 'bg-emerald-700/80 text-emerald-100'
+                  }`}
+                >
+                  {isMicMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                </div>
+                <div className="flex flex-col text-left">
+                  <span className="text-[11px] font-semibold leading-tight">
+                    {isMicMuted ? 'Микрофон выкл' : 'Микрофон вкл'}
+                  </span>
+                  <span className="text-[9px] text-slate-400">
+                    {isMicMuted ? 'Нажмите для вкл' : isSpeaking ? 'Говорите...' : 'Слушает'}
+                  </span>
+                </div>
+              </div>
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  isMicMuted ? 'bg-rose-500' : isSpeaking ? 'bg-emerald-400 animate-ping' : 'bg-emerald-500'
+                }`}
+              />
+            </button>
+
+            <div className="text-[10px] text-slate-500 text-center font-mono">
+              Ctrl+Enter — запуск
+            </div>
           </div>
         </aside>
 
@@ -700,32 +1056,88 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
             </div>
           </div>
 
-          {/* Bottom Split: Terminal Console */}
-          <div className="h-44 bg-[#090d13] border-t border-slate-800 flex flex-col shrink-0 font-mono">
-            <div className="px-3.5 py-1.5 bg-slate-950 border-b border-slate-800/80 flex items-center justify-between text-xs">
-              <div className="flex items-center gap-2 text-slate-300 font-semibold text-[11px]">
-                <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                <span>Терминал / Консоль вывода</span>
+          {/* Bottom Split: Terminal Console with Drag Resizer & Popout Support */}
+          {isTerminalPoppedOut ? (
+            <div className="bg-[#090d13] border-t border-slate-800 p-3 flex items-center justify-between font-mono shrink-0">
+              <div className="flex items-center gap-2.5 text-xs text-slate-300">
+                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span className="font-semibold text-slate-200">🖥️ Терминал вынесен в отдельное окно</span>
+                <span className="text-[11px] text-slate-500 hidden sm:inline">(можно переместить на второй монитор)</span>
               </div>
-              <button
-                onClick={() => setOutput('')}
-                title="Очистить терминал"
-                className="text-[11px] text-slate-500 hover:text-slate-300 transition flex items-center gap-1 font-medium"
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setOutput('')}
+                  className="text-xs text-slate-400 hover:text-slate-200 bg-slate-900 hover:bg-slate-800 border border-slate-700/70 px-2.5 py-1 rounded-lg transition cursor-pointer flex items-center gap-1.5"
+                >
+                  <RotateCcw className="w-3 h-3" /> Очистить
+                </button>
+                <button
+                  onClick={handleTogglePopoutTerminal}
+                  className="text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1.5"
+                >
+                  <ArrowUpRight className="w-3.5 h-3.5" /> Прикрепить к IDE
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div
+              style={{ height: `${terminalHeight}px` }}
+              className="bg-[#090d13] border-t border-slate-800 flex flex-col shrink-0 font-mono relative transition-all"
+            >
+              {/* Drag Resizer Edge Bar */}
+              <div
+                onPointerDown={handleStartResize}
+                onDoubleClick={() => setTerminalHeight((prev) => (prev > 100 ? 55 : 220))}
+                title="Потяните вверх/вниз, чтобы изменить размер терминала (двойной клик — скрыть/раскрыть)"
+                className={`h-2 -mt-1 w-full cursor-row-resize flex items-center justify-center hover:bg-blue-500/40 active:bg-blue-500 transition-colors z-20 group ${
+                  isResizingTerminal ? 'bg-blue-500' : ''
+                }`}
               >
-                <RotateCcw className="w-3 h-3" /> Очистить
-              </button>
-            </div>
+                <div className="w-12 h-1 bg-slate-700 group-hover:bg-blue-300 rounded-full transition-colors" />
+              </div>
 
-            <div className="flex-1 p-3 text-[12px] overflow-y-auto select-text text-emerald-400 whitespace-pre-wrap leading-relaxed">
-              {output ? (
-                output
-              ) : (
-                <span className="text-slate-600">
-                  Нажмите «Запустить» или Ctrl+Enter для выполнения программы...
-                </span>
-              )}
+              {/* Terminal Header Bar */}
+              <div className="px-3.5 py-1.5 bg-slate-950/90 border-b border-slate-800/80 flex items-center justify-between text-xs select-none">
+                <div className="flex items-center gap-2 text-slate-300 font-semibold text-[11px]">
+                  <Terminal className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Терминал / Консоль вывода</span>
+                  <span className="text-[10px] font-normal text-slate-500 hidden md:inline">
+                    (потяните за край для изменения высоты)
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setOutput('')}
+                    title="Очистить терминал"
+                    className="text-[11px] text-slate-400 hover:text-slate-200 transition flex items-center gap-1 font-medium px-2 py-0.5 rounded-md hover:bg-slate-900 cursor-pointer"
+                  >
+                    <RotateCcw className="w-3 h-3" /> Очистить
+                  </button>
+
+                  <button
+                    onClick={handleTogglePopoutTerminal}
+                    title="Вынести терминал в отдельное окно для работы на втором мониторе"
+                    className="text-[11px] text-blue-400 hover:text-blue-300 bg-blue-950/60 hover:bg-blue-900/60 border border-blue-800/60 px-2 py-0.5 rounded-md transition flex items-center gap-1 font-semibold cursor-pointer"
+                  >
+                    <ExternalLink className="w-3 h-3" />
+                    <span>Вынести в окно</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Output Content */}
+              <div className="flex-1 p-3 text-[12px] overflow-y-auto select-text text-emerald-400 whitespace-pre-wrap leading-relaxed">
+                {output ? (
+                  output
+                ) : (
+                  <span className="text-slate-600">
+                    Нажмите «Запустить» или Ctrl+Enter для выполнения программы...
+                  </span>
+                )}
+              </div>
             </div>
-          </div>
+          )}
         </main>
       </div>
 

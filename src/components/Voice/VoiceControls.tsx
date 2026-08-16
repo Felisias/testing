@@ -33,7 +33,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   userRole,
   userName,
 }) => {
-  const [isMuted, setIsMuted] = useState(false);
+  const [isMuted, setIsMuted] = useState(true);
   const [isDeafened, setIsDeafened] = useState(false);
   const [localVolume, setLocalVolume] = useState(0);
   const [isLocalSpeaking, setIsLocalSpeaking] = useState(false);

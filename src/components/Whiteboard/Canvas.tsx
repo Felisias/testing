@@ -74,6 +74,10 @@ export const Canvas: React.FC<CanvasProps> = ({
   const [isDraggingElement, setIsDraggingElement] = useState(false);
   const [dragStartPoint, setDragStartPoint] = useState<Point | null>(null);
   const [elementOriginalPos, setElementOriginalPos] = useState<Point | null>(null);
+  const dragOriginalElementRef = useRef<WhiteboardElement | null>(null);
+  const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
+  const copiedElementRef = useRef<WhiteboardElement | null>(null);
+  const mouseWorldPosRef = useRef<Point>({ x: 0, y: 0 });
 
   // Text inline input state
   const [textInputPos, setTextInputPos] = useState<Point | null>(null);
@@ -404,12 +408,18 @@ export const Canvas: React.FC<CanvasProps> = ({
         });
       } else if (el.type === 'image') {
         const imgEl = el as ImageElement;
-        const img = new Image();
-        img.src = imgEl.src;
+        let img = imageCacheRef.current.get(imgEl.src);
+        if (!img) {
+          img = new Image();
+          img.crossOrigin = 'anonymous';
+          img.onload = () => {
+            render();
+          };
+          img.src = imgEl.src;
+          imageCacheRef.current.set(imgEl.src, img);
+        }
         if (img.complete && img.naturalWidth > 0) {
           ctx.drawImage(img, imgEl.x, imgEl.y, imgEl.width, imgEl.height);
-        } else {
-          img.onload = () => render();
         }
       }
 
@@ -680,6 +690,7 @@ export const Canvas: React.FC<CanvasProps> = ({
         setSelectedElementId(hit.id);
         setIsDraggingElement(true);
         setDragStartPoint(worldPoint);
+        dragOriginalElementRef.current = JSON.parse(JSON.stringify(hit));
         setElementOriginalPos({ x: (hit as any).x || 0, y: (hit as any).y || 0 });
       } else {
         setSelectedElementId(null);
@@ -712,6 +723,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
   const handlePointerMove = (e: React.PointerEvent) => {
     const worldPoint = screenToWorld(e.clientX, e.clientY);
+    mouseWorldPosRef.current = worldPoint;
 
     // Broadcast cursor movement for real-time multiplayer cursors
     getSocket().emit('cursor:move', { x: worldPoint.x, y: worldPoint.y, pageIndex });
@@ -740,15 +752,16 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     if (!canEdit) return;
 
-    if (isDraggingElement && selectedElementId && dragStartPoint && elementOriginalPos) {
+    if (isDraggingElement && selectedElementId && dragStartPoint && dragOriginalElementRef.current) {
       const dx = worldPoint.x - dragStartPoint.x;
       const dy = worldPoint.y - dragStartPoint.y;
+      const orig = dragOriginalElementRef.current;
 
       setElements((prev) =>
         prev.map((el) => {
           if (el.id !== selectedElementId) return el;
-          if (el.type === 'stroke') {
-            const stroke = el as StrokeElement;
+          if (orig.type === 'stroke') {
+            const stroke = orig as StrokeElement;
             const updatedPoints = stroke.points.map((p) => ({
               x: p.x + dx,
               y: p.y + dy,
@@ -756,10 +769,10 @@ export const Canvas: React.FC<CanvasProps> = ({
             return { ...stroke, points: updatedPoints };
           }
           return {
-            ...el,
-            x: elementOriginalPos.x + dx,
-            y: elementOriginalPos.y + dy,
-          };
+            ...orig,
+            x: ((orig as any).x || 0) + dx,
+            y: ((orig as any).y || 0) + dy,
+          } as WhiteboardElement;
         })
       );
       return;
@@ -928,19 +941,36 @@ export const Canvas: React.FC<CanvasProps> = ({
     setTextInputValue('');
   };
 
-  // Zoom with Wheel
+  // Zoom and Pan with Mouse Wheel (Smooth, cursor-anchored)
   const handleWheel = (e: React.WheelEvent) => {
     e.preventDefault();
-    if (e.ctrlKey || e.metaKey) {
-      // Zoom
-      const zoomFactor = e.deltaY < 0 ? 1.08 : 0.92;
-      setZoom((prevZoom) => Math.min(3, Math.max(0.3, prevZoom * zoomFactor)));
-    } else {
-      // Pan
+    if (!containerRef.current) return;
+    const rect = containerRef.current.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
+
+    // Shift key pans horizontally
+    if (e.shiftKey) {
       setPanOffset((prev) => ({
-        x: prev.x - e.deltaX,
-        y: prev.y - e.deltaY,
+        x: prev.x - e.deltaY,
+        y: prev.y,
       }));
+      return;
+    }
+
+    // Intuitive zoom step centered at cursor
+    const zoomFactor = e.deltaY < 0 ? 1.09 : 0.91;
+    const newZoom = Math.min(4.0, Math.max(0.2, zoom * zoomFactor));
+
+    if (Math.abs(newZoom - zoom) > 0.001) {
+      const worldX = (mouseX - panOffset.x) / zoom;
+      const worldY = (mouseY - panOffset.y) / zoom;
+
+      const newPanX = mouseX - worldX * newZoom;
+      const newPanY = mouseY - worldY * newZoom;
+
+      setZoom(newZoom);
+      setPanOffset({ x: newPanX, y: newPanY });
     }
   };
 
@@ -951,6 +981,188 @@ export const Canvas: React.FC<CanvasProps> = ({
     getSocket().emit('board:element:delete', { elementId: selectedElementId, pageIndex });
     setSelectedElementId(null);
   };
+
+  // Clipboard Image Pasting and Element Copy / Paste (Ctrl+C / Ctrl+V)
+  useEffect(() => {
+    const processImageSource = (src: string) => {
+      const img = new Image();
+      img.crossOrigin = 'anonymous';
+      img.onload = () => {
+        imageCacheRef.current.set(src, img);
+        let width = img.naturalWidth || 400;
+        let height = img.naturalHeight || 300;
+        const maxDim = 500;
+        if (width > maxDim || height > maxDim) {
+          const ratio = Math.min(maxDim / width, maxDim / height);
+          width = Math.round(width * ratio);
+          height = Math.round(height * ratio);
+        }
+
+        let targetPos = mouseWorldPosRef.current;
+        if (!targetPos || (targetPos.x === 0 && targetPos.y === 0)) {
+          const container = containerRef.current;
+          const cx = container ? container.clientWidth / 2 : window.innerWidth / 2;
+          const cy = container ? container.clientHeight / 2 : window.innerHeight / 2;
+          targetPos = screenToWorld(cx, cy);
+        }
+
+        const newImg: ImageElement = {
+          id: `el-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`,
+          userId: 'self',
+          userName,
+          userColor,
+          type: 'image',
+          src,
+          x: Math.round(targetPos.x - width / 2),
+          y: Math.round(targetPos.y - height / 2),
+          width,
+          height,
+          createdAt: Date.now(),
+          updatedAt: Date.now(),
+        };
+
+        setElements((prev) => [...prev, newImg]);
+        getSocket().emit('board:element:create', { element: newImg, pageIndex });
+        setSelectedElementId(newImg.id);
+        render();
+      };
+      img.src = src;
+    };
+
+    const handlePaste = (e: ClipboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+        target !== textInputRef.current
+      ) {
+        return;
+      }
+
+      if (!canEdit) return;
+
+      // 1. Check for Image in clipboard files
+      const files = e.clipboardData?.files;
+      if (files && files.length > 0) {
+        for (let i = 0; i < files.length; i++) {
+          const file = files[i];
+          if (file.type.startsWith('image/')) {
+            e.preventDefault();
+            const reader = new FileReader();
+            reader.onload = (event) => {
+              const src = event.target?.result as string;
+              if (src) processImageSource(src);
+            };
+            reader.readAsDataURL(file);
+            return;
+          }
+        }
+      }
+
+      // 2. Check for Image in clipboard items
+      const items = e.clipboardData?.items;
+      if (items) {
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.type.startsWith('image/')) {
+            const blob = item.getAsFile();
+            if (blob) {
+              e.preventDefault();
+              const reader = new FileReader();
+              reader.onload = (event) => {
+                const src = event.target?.result as string;
+                if (src) processImageSource(src);
+              };
+              reader.readAsDataURL(blob);
+              return;
+            }
+          }
+        }
+      }
+
+      // 3. Check for HTML containing an <img> tag or direct image link in text
+      const html = e.clipboardData?.getData('text/html');
+      if (html) {
+        const match = html.match(/<img[^>]+src=["']([^"']+)["']/i);
+        if (match && match[1]) {
+          e.preventDefault();
+          processImageSource(match[1]);
+          return;
+        }
+      }
+
+      const text = e.clipboardData?.getData('text/plain')?.trim();
+      if (text && (text.startsWith('data:image/') || text.match(/^https?:\/\/.*\.(png|jpg|jpeg|webp|gif|svg)(\?.*)?$/i))) {
+        e.preventDefault();
+        processImageSource(text);
+        return;
+      }
+
+      // 4. Check for copied internal whiteboard element
+      if (copiedElementRef.current) {
+        e.preventDefault();
+        const orig = copiedElementRef.current;
+        const newId = `el-${Date.now()}-${Math.random().toString(36).substr(2, 5)}`;
+
+        let cloned: WhiteboardElement;
+        if (orig.type === 'stroke') {
+          const st = orig as StrokeElement;
+          cloned = {
+            ...st,
+            id: newId,
+            points: st.points.map((p) => ({ x: p.x + 30, y: p.y + 30 })),
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          };
+        } else {
+          cloned = {
+            ...orig,
+            id: newId,
+            x: ((orig as any).x || 0) + 30,
+            y: ((orig as any).y || 0) + 30,
+            createdAt: Date.now(),
+            updatedAt: Date.now(),
+          } as WhiteboardElement;
+        }
+
+        setElements((prev) => [...prev, cloned]);
+        getSocket().emit('board:element:create', { element: cloned, pageIndex });
+        setSelectedElementId(newId);
+        copiedElementRef.current = cloned;
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement;
+      if (
+        (target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement) &&
+        target !== textInputRef.current
+      ) {
+        return;
+      }
+
+      // Copy element: Ctrl+C / Cmd+C (supporting English 'c' and Russian 'с' key)
+      const isC = e.code === 'KeyC' || e.key.toLowerCase() === 'c' || e.key === 'с' || e.key === 'С';
+      if ((e.ctrlKey || e.metaKey) && isC && selectedElementId) {
+        const el = elements.find((item) => item.id === selectedElementId);
+        if (el) {
+          copiedElementRef.current = JSON.parse(JSON.stringify(el));
+        }
+      }
+
+      // Delete element: Delete or Backspace
+      if ((e.key === 'Delete' || e.key === 'Backspace') && selectedElementId && !textInputPos) {
+        e.preventDefault();
+        deleteSelected();
+      }
+    };
+
+    window.addEventListener('paste', handlePaste);
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('paste', handlePaste);
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [canEdit, selectedElementId, elements, pageIndex, userName, userColor, textInputPos, screenToWorld]);
 
   return (
     <div

@@ -686,7 +686,7 @@ async function startServer() {
           role: role || 'student',
           avatar: avatar || (role === 'tutor' ? '👨‍🏫' : '🎓'),
           color: assignedColor,
-          micMuted: false,
+          micMuted: true,
           isSpeaking: false,
           joinedAt: Date.now(),
         };
@@ -1118,6 +1118,25 @@ async function startServer() {
         micMuted: data.micMuted,
         isSpeaking: data.isSpeaking,
       });
+    });
+
+    // Profile update (name, avatar, color)
+    socket.on('user:profile:update', (data: { userName?: string; avatar?: string; color?: string }) => {
+      if (!currentRoomId || !rooms[currentRoomId] || !currentUser) return;
+      const room = rooms[currentRoomId];
+
+      if (data.userName && data.userName.trim()) {
+        currentUser.name = data.userName.trim();
+      }
+      if (data.avatar) {
+        currentUser.avatar = data.avatar;
+      }
+      if (data.color) {
+        currentUser.color = data.color;
+      }
+
+      room.participants[socket.id] = currentUser;
+      io.to(currentRoomId).emit('room:participants', Object.values(room.participants));
     });
 
     // Tutor Cheer / Confetti event

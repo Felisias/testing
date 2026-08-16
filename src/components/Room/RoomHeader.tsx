@@ -559,7 +559,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
         {onOpenAvatarPicker && (
           <button
             onClick={onOpenAvatarPicker}
-            title={`${userName} (Нажмите, чтобы сменить аватарку)`}
+            title={`${userName} (Нажмите, чтобы изменить имя, аватарку и цвет)`}
             className="flex items-center gap-1.5 p-1 rounded-xl transition cursor-pointer hover:opacity-90"
           >
             <UserAvatar
