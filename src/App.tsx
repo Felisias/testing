@@ -269,6 +269,9 @@ export default function App() {
     if (targetSubject) setSubject(targetSubject);
     setIsInRoom(true);
 
+    // Eagerly acquire microphone on user gesture to establish audio stream immediately
+    voiceManager.initLocalAudio().catch(() => {});
+
     const socket = getSocket();
 
     const joinPayload = {
