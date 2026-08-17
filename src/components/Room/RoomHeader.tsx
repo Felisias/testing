@@ -8,9 +8,6 @@ import { getSocket } from '../../services/socket';
 import confetti from 'canvas-confetti';
 import {
   GraduationCap,
-  Copy,
-  Check,
-  Share2,
   Lock,
   Unlock,
   Star,
@@ -69,9 +66,6 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   onSelectView,
   onOpenAvatarPicker,
 }) => {
-  const [copiedCode, setCopiedCode] = useState(false);
-  const [copiedLink, setCopiedLink] = useState(false);
-  const [showShareModal, setShowShareModal] = useState(false);
   const [showUsersModal, setShowUsersModal] = useState(false);
   const [showInviteCodeModal, setShowInviteCodeModal] = useState(false);
 
@@ -122,19 +116,6 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
     }
     return () => clearInterval(interval);
   }, [isTimerRunning, timerSeconds]);
-
-  const copyRoomCode = () => {
-    navigator.clipboard.writeText(roomId);
-    setCopiedCode(true);
-    setTimeout(() => setCopiedCode(false), 2000);
-  };
-
-  const copyDirectLink = () => {
-    const link = `${window.location.origin}?room=${roomId}`;
-    navigator.clipboard.writeText(link);
-    setCopiedLink(true);
-    setTimeout(() => setCopiedLink(false), 2000);
-  };
 
   const handleToggleLock = () => {
     getSocket().emit('board:lock:toggle');
@@ -208,7 +189,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
           : 'bg-white/95 backdrop-blur-md border-slate-200 text-slate-900'
       }`}
     >
-      {/* Left: Site Icon and Room Title ONLY (No "Вы вошли как") */}
+      {/* Left: Site Icon and Room Title ONLY (Clean, single-line, no old room code) */}
       <div className="flex items-center gap-3">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-sm shrink-0">
@@ -216,49 +197,13 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
           </div>
           <div>
             <h1
-              className={`text-sm font-bold leading-tight truncate max-w-[180px] sm:max-w-[260px] ${
+              className={`text-sm font-bold leading-tight truncate max-w-[200px] sm:max-w-[280px] ${
                 isDarkTheme ? 'text-white' : 'text-slate-900'
               }`}
             >
               {roomTitle}
             </h1>
           </div>
-        </div>
-
-        {/* Room Code Badge with 1-click copy */}
-        <div
-          className={`flex items-center gap-1 rounded-xl px-2.5 py-1 transition border ${
-            isDarkTheme
-              ? 'bg-slate-800 border-slate-700 hover:bg-slate-750 text-slate-300'
-              : 'bg-slate-100 border-slate-200 hover:bg-slate-200/90 text-slate-600'
-          }`}
-        >
-          <span className="text-[11px] font-medium opacity-80">Код:</span>
-          <span
-            className={`font-mono text-xs font-bold tracking-wider ${
-              isDarkTheme ? 'text-blue-400' : 'text-blue-600'
-            }`}
-          >
-            {roomId}
-          </span>
-          <button
-            onClick={copyRoomCode}
-            title="Скопировать код комнаты"
-            className="p-1 hover:text-blue-400 transition cursor-pointer"
-          >
-            {copiedCode ? (
-              <Check className="w-3.5 h-3.5 text-emerald-500" />
-            ) : (
-              <Copy className="w-3.5 h-3.5" />
-            )}
-          </button>
-          <button
-            onClick={() => setShowShareModal(true)}
-            title="Поделиться ссылкой с учеником"
-            className="p-1 hover:text-blue-400 transition ml-0.5 cursor-pointer"
-          >
-            <Share2 className="w-3.5 h-3.5" />
-          </button>
         </div>
       </div>
 
@@ -599,94 +544,6 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
           <LogOut className="w-4 h-4" />
         </button>
       </div>
-
-      {/* Share Modal Dialog */}
-      {showShareModal &&
-        typeof document !== 'undefined' &&
-        createPortal(
-          <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-[9999] animate-in fade-in overflow-y-auto">
-            <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 p-6 max-w-md w-full animate-in zoom-in-95 text-slate-800 my-auto">
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-2.5">
-                  <div className="p-2.5 bg-blue-50 text-blue-600 rounded-2xl">
-                    <Share2 className="w-5 h-5" />
-                  </div>
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900">Пригласить на урок</h3>
-                    <p className="text-xs text-slate-500">Отправьте ученику код или прямую ссылку</p>
-                  </div>
-                </div>
-                <button
-                  onClick={() => setShowShareModal(false)}
-                  className="w-8 h-8 rounded-full bg-slate-100 hover:bg-slate-200 text-slate-500 hover:text-slate-900 flex items-center justify-center transition cursor-pointer"
-                >
-                  ✕
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                {/* Code Box */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Код комнаты:
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <div className="flex-1 bg-slate-100 border border-slate-300 rounded-2xl px-4 py-2.5 font-mono text-lg font-bold text-blue-700 tracking-wider text-center select-all">
-                      {roomId}
-                    </div>
-                    <button
-                      onClick={copyRoomCode}
-                      className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-2xl font-bold text-xs transition flex items-center gap-1.5 shadow-md shadow-blue-600/30 cursor-pointer"
-                    >
-                      {copiedCode ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-                      {copiedCode ? 'Скопировано' : 'Копировать'}
-                    </button>
-                  </div>
-                </div>
-
-                {/* Direct Link Box */}
-                <div>
-                  <label className="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1">
-                    Прямая ссылка для входа:
-                  </label>
-                  <div className="flex items-center gap-2">
-                    <input
-                      type="text"
-                      readOnly
-                      value={`${window.location.origin}?room=${roomId}`}
-                      className="flex-1 bg-slate-50 border border-slate-200 rounded-2xl px-3.5 py-2.5 text-xs text-slate-700 select-all font-mono"
-                    />
-                    <button
-                      onClick={copyDirectLink}
-                      className="px-3.5 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-2xl font-bold text-xs transition flex items-center gap-1 shadow-sm cursor-pointer"
-                    >
-                      {copiedLink ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
-                      Ссылка
-                    </button>
-                  </div>
-                </div>
-
-                {/* Step by Step Tip */}
-                <div className="bg-slate-50 rounded-2xl p-3.5 text-xs text-slate-600 space-y-1 border border-slate-200">
-                  <p className="font-bold text-slate-800">Как ученику подключиться:</p>
-                  <p>1. Открыть ссылку или сайт и войти в свой аккаунт ученика.</p>
-                  <p>
-                    2. Ввести код <strong className="text-blue-600 font-mono font-bold">{roomId}</strong>.
-                  </p>
-                  <p>3. Включить микрофон и рисовать вместе на доске!</p>
-                </div>
-
-                <button
-                  onClick={() => setShowShareModal(false)}
-                  className="w-full py-3 bg-slate-100 hover:bg-slate-200 text-slate-800 font-bold rounded-2xl text-xs transition cursor-pointer"
-                >
-                  Закрыть
-                </button>
-              </div>
-            </div>
-          </div>,
-          document.body
-        )}
 
       {/* Users List Modal for Tutors */}
       <UsersListModal isOpen={showUsersModal} onClose={() => setShowUsersModal(false)} />

@@ -95,13 +95,13 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
 
   // Form Fields - Guest
   const [guestName, setGuestName] = useState('');
-  const [guestRoomCode, setGuestRoomCode] = useState('');
+  const [guestInviteCode, setGuestInviteCode] = useState('');
   const [guestAvatar, setGuestAvatar] = useState('🎓');
   const [guestRole, setGuestRole] = useState<UserRole>('student');
 
   // Logged-in Room Action Tab: 'join' | 'create'
   const [roomTab, setRoomTab] = useState<'join' | 'create'>('join');
-  const [roomCode, setRoomCode] = useState('');
+  const [inviteKeyInput, setInviteKeyInput] = useState('');
   const [roomIcon, setRoomIcon] = useState('🎓');
   const [lessonTitle, setLessonTitle] = useState('Урок с преподавателем');
   const [userColor, setUserColor] = useState(AVATAR_COLORS[0]);
@@ -163,29 +163,17 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     }
   }, []);
 
-  // Check URL query param ?room=CODE
+  // Check URL query param ?invite=CODE or legacy ?room=CODE
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const urlRoom = params.get('room');
-    if (urlRoom) {
-      const code = urlRoom.trim().toUpperCase();
-      setRoomCode(code);
-      setGuestRoomCode(code);
+    const urlInvite = params.get('invite') || params.get('room');
+    if (urlInvite) {
+      const code = urlInvite.trim().toUpperCase();
+      setInviteKeyInput(code);
+      setGuestInviteCode(code);
       setRoomTab('join');
     }
   }, []);
-
-  const generateRoomCode = () => {
-    const randomNum = Math.floor(1000 + Math.random() * 9000);
-    return `ROOM-${randomNum}`;
-  };
-
-  // Generate initial room code
-  useEffect(() => {
-    if (roomTab === 'create' && !roomCode) {
-      setRoomCode(generateRoomCode());
-    }
-  }, [roomTab]);
 
   const saveRoomToHistory = (id: string, title: string, subject: string, role: UserRole) => {
     const entry: SavedBoard = {
@@ -304,53 +292,91 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     }
   };
 
+  // Helper function to redeem invite key or join existing active room
+  const redeemOrJoin = async (key: string, name: string, username?: string, avatar?: string) => {
+    const cleanKey = normalizeRoomCode(key);
+    if (!cleanKey) {
+      throw new Error('Введите одноразовый ключ доступа от преподавателя');
+    }
+
+    // 1. First try redeeming as one-time invite key
+    try {
+      const inviteRes = await fetch('/api/invite-code/redeem', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          code: cleanKey,
+          username: username || 'guest',
+          name,
+        }),
+      });
+
+      const inviteData = await inviteRes.json();
+      if (inviteRes.ok && inviteData?.roomId) {
+        return {
+          roomId: inviteData.roomId,
+          title: inviteData.title || `Занятие ${inviteData.roomId}`,
+          subject: inviteData.subject || 'Занятие',
+        };
+      } else if (!inviteRes.ok && inviteData?.error && !inviteData.error.includes('не найден')) {
+        // If it's explicitly "already used", throw exact server error
+        throw new Error(inviteData.error);
+      }
+    } catch (e: any) {
+      if (e?.message && !e.message.includes('не найден')) {
+        throw e;
+      }
+    }
+
+    // 2. Fallback: check if it's an existing room (e.g. for restored links)
+    const checkRes = await fetch(`/api/rooms/${encodeURIComponent(cleanKey)}`);
+    if (checkRes.ok) {
+      const roomData = await checkRes.json();
+      if (roomData && roomData.exists) {
+        return {
+          roomId: roomData.id || cleanKey,
+          title: roomData.title || `Занятие ${cleanKey}`,
+          subject: roomData.subject || 'Занятие',
+        };
+      }
+    }
+
+    throw new Error(`Одноразовый ключ "${cleanKey}" не найден или уже был использован. Запросите новый ключ у преподавателя.`);
+  };
+
   // Handle Quick Guest Entry
   const handleGuestEntry = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
     const name = guestName.trim();
-    const code = normalizeRoomCode(guestRoomCode);
+    const key = guestInviteCode.trim();
 
     if (!name) {
       setAuthError('Укажите ваше имя');
       return;
     }
 
-    if (!code) {
-      setAuthError('Введите код комнаты от преподавателя');
+    if (!key) {
+      setAuthError('Введите одноразовый ключ от преподавателя (например INV-XXXX)');
       return;
     }
 
     setAuthLoading(true);
     try {
-      let finalCode = code;
-      const checkRes = await fetch(`/api/rooms/${encodeURIComponent(code)}`);
-      if (!checkRes.ok) {
-        setAuthError(`Комната с кодом "${code}" не найдена. Пожалуйста, проверьте код или попросите преподавателя создать комнату.`);
-        setAuthLoading(false);
-        return;
-      }
-      const data = await checkRes.json();
-      if (!data || !data.exists) {
-        setAuthError(`Комната с кодом "${code}" не найдена. Создать комнату может только преподаватель.`);
-        setAuthLoading(false);
-        return;
-      }
-      if (data?.id) finalCode = data.id;
-
-      saveRoomToHistory(finalCode, data.title || `Урок ${finalCode}`, data.subject || 'Занятие', 'student');
+      const roomInfo = await redeemOrJoin(key, name, undefined, guestAvatar);
+      saveRoomToHistory(roomInfo.roomId, roomInfo.title, roomInfo.subject, 'student');
 
       onJoinRoom({
-        roomId: finalCode,
+        roomId: roomInfo.roomId,
         userName: name,
         role: 'student',
         color: userColor,
         avatar: guestAvatar,
-        title: data.title || `Занятие ${finalCode}`,
-        subject: data.subject || 'Занятие',
+        title: roomInfo.title,
+        subject: roomInfo.subject,
       });
     } catch (err: any) {
-      setAuthError(err?.message || 'Не удалось подключиться к комнате. Проверьте соединение с сервером.');
+      setAuthError(err?.message || 'Не удалось активировать ключ доступа.');
     } finally {
       setAuthLoading(false);
     }
@@ -363,57 +389,41 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     setAuthError(null);
 
     const isStudent = currentUser.role === 'student';
-    let targetCode = normalizeRoomCode(roomCode);
 
-    // Students or user in 'join' tab MUST join an existing room
+    // Students or tutor entering via key in 'join' tab
     if (isStudent || roomTab === 'join') {
-      if (!targetCode) {
-        setAuthError('Введите код комнаты, полученный от преподавателя');
+      const key = inviteKeyInput.trim();
+      if (!key) {
+        setAuthError('Введите одноразовый ключ доступа от преподавателя (например INV-XXXX)');
         return;
       }
 
       setAuthLoading(true);
       try {
-        let finalCode = targetCode;
-        const checkRes = await fetch(`/api/rooms/${encodeURIComponent(targetCode)}`);
-        if (!checkRes.ok) {
-          setAuthError(`Комната с кодом "${targetCode}" не найдена. Пожалуйста, проверьте код или попросите преподавателя создать комнату.`);
-          setAuthLoading(false);
-          return;
-        }
-        const data = await checkRes.json();
-        if (!data || !data.exists) {
-          setAuthError(`Комната с кодом "${targetCode}" не найдена. Создать комнату может только преподаватель.`);
-          setAuthLoading(false);
-          return;
-        }
-        if (data?.id) finalCode = data.id;
-
-        saveRoomToHistory(finalCode, data.title || `Урок ${finalCode}`, data.subject || 'Занятие', currentUser.role);
+        const roomInfo = await redeemOrJoin(key, currentUser.name, currentUser.username, currentUser.avatar || regAvatar);
+        saveRoomToHistory(roomInfo.roomId, roomInfo.title, roomInfo.subject, currentUser.role);
 
         onJoinRoom({
-          roomId: finalCode,
+          roomId: roomInfo.roomId,
           userName: currentUser.name,
           role: currentUser.role,
           color: userColor,
           avatar: currentUser.avatar || regAvatar,
           userId: currentUser.id,
-          title: data.title,
-          subject: data.subject,
+          title: roomInfo.title,
+          subject: roomInfo.subject,
         });
       } catch (err: any) {
-        setAuthError(err?.message || 'Не удалось проверить комнату. Проверьте подключение к сети.');
+        setAuthError(err?.message || 'Не удалось активировать ключ.');
       } finally {
         setAuthLoading(false);
       }
       return;
     }
 
-    // Tutor creating room
-    if (!targetCode) {
-      targetCode = generateRoomCode();
-    }
-
+    // Tutor creating a brand new room (auto-assigned unique internal ID)
+    const randomNum = Math.floor(1000 + Math.random() * 9000);
+    const targetCode = `ROOM-${randomNum}`;
     const title = `${roomIcon} ${lessonTitle.trim() || 'Урок'}`;
     const subject = 'Занятие';
 
@@ -869,7 +879,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                   </form>
                 )}
 
-                {/* GUEST QUICK ENTRY */}
+                {/* GUEST QUICK ENTRY (Single-use invite key) */}
                 {authMode === 'guest' && (
                   <form onSubmit={handleGuestEntry} className="space-y-3.5">
                     <div>
@@ -889,31 +899,36 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                     <div>
                       <div className="flex items-center justify-between mb-1">
                         <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                          Код комнаты
+                          Одноразовый ключ доступа:
                         </label>
                         <button
                           type="button"
-                          onClick={() => handlePasteClipboard(setGuestRoomCode)}
-                          className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 cursor-pointer"
+                          onClick={() => handlePasteClipboard(setGuestInviteCode)}
+                          className="text-[11px] text-amber-600 hover:text-amber-700 font-semibold flex items-center gap-1 cursor-pointer"
                         >
                           <Clipboard className="w-3 h-3" />
-                          <span>Вставить</span>
+                          <span>Вставить ключ</span>
                         </button>
                       </div>
                       <input
                         type="text"
-                        value={guestRoomCode}
-                        onChange={(e) => setGuestRoomCode(e.target.value.toUpperCase())}
-                        placeholder="ROOM-2024"
-                        className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-blue-600 placeholder-slate-400 outline-none uppercase tracking-wider transition"
+                        required
+                        value={guestInviteCode}
+                        onChange={(e) => setGuestInviteCode(e.target.value.toUpperCase())}
+                        placeholder="Например: INV-7294"
+                        className="w-full bg-amber-50/50 hover:bg-white focus:bg-white border border-amber-200 focus:border-amber-500 focus:ring-2 focus:ring-amber-100 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-amber-700 placeholder-slate-400 outline-none uppercase tracking-wider text-center transition"
                       />
+                      <p className="text-[10px] text-slate-400 mt-1">
+                        Ключ выдается преподавателем перед занятием
+                      </p>
                     </div>
 
                     <button
                       type="submit"
-                      className="w-full h-11 bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 mt-2 cursor-pointer"
+                      disabled={authLoading}
+                      className="w-full h-11 bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs rounded-xl shadow-md shadow-amber-600/20 transition flex items-center justify-center gap-2 mt-2 cursor-pointer disabled:opacity-50"
                     >
-                      <span>Войти на доску</span>
+                      <span>{authLoading ? 'Активация...' : 'Активировать и войти'}</span>
                       <ArrowRight className="w-4 h-4" />
                     </button>
                   </form>
@@ -935,15 +950,12 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                       }`}
                     >
                       <KeyRound className="w-3.5 h-3.5" />
-                      <span>Войти по коду</span>
+                      <span>Одноразовый ключ</span>
                     </button>
 
                     <button
                       type="button"
-                      onClick={() => {
-                        setRoomTab('create');
-                        if (!roomCode) setRoomCode(generateRoomCode());
-                      }}
+                      onClick={() => setRoomTab('create')}
                       className={`py-2 px-3 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
                         roomTab === 'create'
                           ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
@@ -956,41 +968,44 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                   </div>
                 ) : (
                   <div className="mb-4 text-center">
-                    <div className="text-xs font-bold text-slate-800">Вход на урок по коду</div>
-                    <div className="text-[11px] text-slate-500">Введите код, который вам отправил преподаватель</div>
+                    <div className="text-xs font-bold text-slate-800">Вход на занятие по одноразовому ключу</div>
+                    <div className="text-[11px] text-slate-500">Введите одноразовый ключ, который вам отправил преподаватель</div>
                   </div>
                 )}
 
                 <form onSubmit={handleUserRoomSubmit} className="space-y-4">
-                  {/* TAB: JOIN ROOM */}
+                  {/* TAB: JOIN ROOM VIA ONE-TIME INVITE KEY */}
                   {roomTab === 'join' ? (
                     <div className="space-y-3.5">
                       <div>
                         <div className="flex items-center justify-between mb-1.5">
                           <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                            Код комнаты от преподавателя:
+                            Одноразовый ключ доступа:
                           </label>
                           <button
                             type="button"
-                            onClick={() => handlePasteClipboard(setRoomCode)}
-                            className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 cursor-pointer"
+                            onClick={() => handlePasteClipboard(setInviteKeyInput)}
+                            className="text-[11px] text-amber-600 hover:text-amber-700 font-semibold flex items-center gap-1 cursor-pointer"
                           >
                             <Clipboard className="w-3 h-3" />
-                            <span>Вставить из буфера</span>
+                            <span>Вставить ключ</span>
                           </button>
                         </div>
                         <input
                           type="text"
                           required
-                          value={roomCode}
-                          onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                          placeholder="Например: ROOM-7391"
-                          className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-2xl px-4 py-3 text-sm font-mono font-bold text-blue-600 placeholder-slate-400 outline-none uppercase tracking-widest text-center transition"
+                          value={inviteKeyInput}
+                          onChange={(e) => setInviteKeyInput(e.target.value.toUpperCase())}
+                          placeholder="Например: INV-7391"
+                          className="w-full bg-amber-50/50 hover:bg-white focus:bg-white border border-amber-200 focus:border-amber-500 focus:ring-2 focus:ring-amber-100 rounded-2xl px-4 py-3 text-sm font-mono font-bold text-amber-700 placeholder-slate-400 outline-none uppercase tracking-widest text-center transition"
                         />
+                        <p className="text-[10px] text-slate-400 mt-1 text-center">
+                          После активации ключ сгорает, а доска навсегда появится в вашем списке досок
+                        </p>
                       </div>
                     </div>
                   ) : (
-                    /* TAB: CREATE ROOM (No subject tags - room icon + title) */
+                    /* TAB: CREATE ROOM (Tutor only) */
                     <div className="space-y-3.5">
                       {/* Room Icon Selector */}
                       <div>
@@ -1026,29 +1041,6 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                           onChange={(e) => setLessonTitle(e.target.value)}
                           placeholder="Например: Занятие с репетитором"
                           className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3.5 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none transition"
-                        />
-                      </div>
-
-                      {/* Generated Room Code with Refresh */}
-                      <div>
-                        <div className="flex items-center justify-between mb-1">
-                          <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                            Сгенерированный код комнаты
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => setRoomCode(generateRoomCode())}
-                            className="text-[11px] text-blue-600 hover:text-blue-700 font-semibold flex items-center gap-1 cursor-pointer"
-                          >
-                            <RefreshCw className="w-3 h-3" />
-                            <span>Обновить</span>
-                          </button>
-                        </div>
-                        <input
-                          type="text"
-                          value={roomCode}
-                          onChange={(e) => setRoomCode(e.target.value.toUpperCase())}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3.5 py-2 text-xs font-mono font-bold text-blue-600 outline-none uppercase tracking-wider"
                         />
                       </div>
                     </div>
