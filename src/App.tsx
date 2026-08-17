@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   ToolType,
   BackgroundType,
@@ -12,6 +12,7 @@ import {
   ImageElement,
   ToolSpecificSettings,
   DEFAULT_TOOL_SETTINGS,
+  WhiteboardAction,
 } from './types';
 import { KeybindSettings, DEFAULT_KEYBINDS } from './types/extra';
 import { getSocket, disconnectSocket } from './services/socket';
@@ -31,13 +32,7 @@ import confetti from 'canvas-confetti';
 
 const KEYBINDS_STORAGE_KEY = 'tutorboard_keybinds';
 const STORAGE_KEY = 'tutorboard_user_session';
-
-// Helper to compare two element arrays
-const isSameElementList = (a: WhiteboardElement[], b: WhiteboardElement[]): boolean => {
-  if (a === b) return true;
-  if (a.length !== b.length) return false;
-  return a.every((el, idx) => el.id === b[idx]?.id && el.updatedAt === b[idx]?.updatedAt);
-};
+const ACTIVE_ROOM_KEY = 'tutorboard_active_room';
 
 export default function App() {
   // Session & User State
@@ -107,9 +102,9 @@ export default function App() {
   const [zoom, setZoom] = useState(1);
   const [panOffset, setPanOffset] = useState<Point>({ x: 0, y: 0 });
 
-  // Undo / Redo History for current user
-  const [undoStack, setUndoStack] = useState<{ [pageIndex: number]: WhiteboardElement[][] }>({ 0: [] });
-  const [redoStack, setRedoStack] = useState<{ [pageIndex: number]: WhiteboardElement[][] }>({ 0: [] });
+  // User-Specific Action-Based Undo / Redo History
+  const [undoActions, setUndoActions] = useState<{ [pageIndex: number]: WhiteboardAction[] }>({ 0: [] });
+  const [redoActions, setRedoActions] = useState<{ [pageIndex: number]: WhiteboardAction[] }>({ 0: [] });
 
   // Multiplayer & Ephemeral State
   const [participants, setParticipants] = useState<{ [socketId: string]: Participant }>({});
@@ -133,19 +128,6 @@ export default function App() {
       setPages((prevPages) => {
         const currentList = prevPages[activePageIndex] || [];
         const newList = typeof action === 'function' ? action(currentList) : action;
-
-        // Only push to undo stack if elements actually changed
-        if (!isSameElementList(currentList, newList)) {
-          setUndoStack((prevUndo) => {
-            const pageUndo = prevUndo[activePageIndex] || [];
-            return {
-              ...prevUndo,
-              [activePageIndex]: [...pageUndo, currentList].slice(-30),
-            };
-          });
-          setRedoStack((prevRedo) => ({ ...prevRedo, [activePageIndex]: [] }));
-        }
-
         return {
           ...prevPages,
           [activePageIndex]: newList,
@@ -155,41 +137,77 @@ export default function App() {
     [activePageIndex]
   );
 
-  // Undo / Redo handlers with stable single-click response
+  // Record a local action into the user's specific undo stack
+  const handleRecordAction = useCallback(
+    (action: WhiteboardAction) => {
+      setUndoActions((prev) => {
+        const list = prev[activePageIndex] || [];
+        return {
+          ...prev,
+          [activePageIndex]: [...list, action].slice(-50),
+        };
+      });
+      setRedoActions((prev) => ({
+        ...prev,
+        [activePageIndex]: [],
+      }));
+    },
+    [activePageIndex]
+  );
+
+  // User-Specific Undo: Reverts ONLY this user's actions without affecting others' drawings
   const handleUndo = useCallback(() => {
-    setUndoStack((prevUndo) => {
+    setUndoActions((prevUndo) => {
       const pageUndo = [...(prevUndo[activePageIndex] || [])];
       if (pageUndo.length === 0) return prevUndo;
 
-      const currentList = pages[activePageIndex] || [];
-      let previousState = pageUndo.pop();
+      const actionToUndo = pageUndo.pop()!;
+      const socket = getSocket();
 
-      // Skip duplicate consecutive states to guarantee single-click undo
-      while (previousState && isSameElementList(previousState, currentList) && pageUndo.length > 0) {
-        previousState = pageUndo.pop();
+      if (actionToUndo.type === 'create') {
+        // User created elements; remove ONLY these element IDs
+        const idsToRemove = new Set(actionToUndo.elements.map((el) => el.id));
+        setPages((prevPages) => ({
+          ...prevPages,
+          [activePageIndex]: (prevPages[activePageIndex] || []).filter((el) => !idsToRemove.has(el.id)),
+        }));
+        socket.emit('board:elements:deleteBatch', {
+          elementIds: Array.from(idsToRemove),
+          pageIndex: activePageIndex,
+        });
+      } else if (actionToUndo.type === 'delete') {
+        // User deleted elements; restore them
+        const restored = actionToUndo.elements;
+        setPages((prevPages) => {
+          const existing = prevPages[activePageIndex] || [];
+          const existingIds = new Set(existing.map((e) => e.id));
+          const toAdd = restored.filter((e) => !existingIds.has(e.id));
+          return {
+            ...prevPages,
+            [activePageIndex]: [...existing, ...toAdd],
+          };
+        });
+        restored.forEach((el) => {
+          socket.emit('board:element:create', { element: el, pageIndex: activePageIndex });
+        });
+      } else if (actionToUndo.type === 'update') {
+        // User transformed elements; restore their "before" state
+        const beforeMap = new Map(actionToUndo.before.map((el) => [el.id, el]));
+        setPages((prevPages) => ({
+          ...prevPages,
+          [activePageIndex]: (prevPages[activePageIndex] || []).map((el) => beforeMap.get(el.id) || el),
+        }));
+        actionToUndo.before.forEach((el) => {
+          socket.emit('board:element:update', { element: el, pageIndex: activePageIndex });
+        });
       }
 
-      if (!previousState || isSameElementList(previousState, currentList)) {
-        return prevUndo;
-      }
-
-      setRedoStack((prevRedo) => {
+      setRedoActions((prevRedo) => {
         const pageRedo = prevRedo[activePageIndex] || [];
         return {
           ...prevRedo,
-          [activePageIndex]: [...pageRedo, currentList],
+          [activePageIndex]: [...pageRedo, actionToUndo],
         };
-      });
-
-      setPages((prevPages) => ({
-        ...prevPages,
-        [activePageIndex]: previousState!,
-      }));
-
-      const socket = getSocket();
-      socket.emit('board:elements:replace', {
-        pageIndex: activePageIndex,
-        elements: previousState,
       });
 
       return {
@@ -197,41 +215,58 @@ export default function App() {
         [activePageIndex]: pageUndo,
       };
     });
-  }, [activePageIndex, pages]);
+  }, [activePageIndex]);
 
+  // User-Specific Redo
   const handleRedo = useCallback(() => {
-    setRedoStack((prevRedo) => {
+    setRedoActions((prevRedo) => {
       const pageRedo = [...(prevRedo[activePageIndex] || [])];
       if (pageRedo.length === 0) return prevRedo;
 
-      const currentList = pages[activePageIndex] || [];
-      let nextState = pageRedo.pop();
+      const actionToRedo = pageRedo.pop()!;
+      const socket = getSocket();
 
-      while (nextState && isSameElementList(nextState, currentList) && pageRedo.length > 0) {
-        nextState = pageRedo.pop();
+      if (actionToRedo.type === 'create') {
+        const toRestore = actionToRedo.elements;
+        setPages((prevPages) => {
+          const existing = prevPages[activePageIndex] || [];
+          const existingIds = new Set(existing.map((e) => e.id));
+          const toAdd = toRestore.filter((e) => !existingIds.has(e.id));
+          return {
+            ...prevPages,
+            [activePageIndex]: [...existing, ...toAdd],
+          };
+        });
+        toRestore.forEach((el) => {
+          socket.emit('board:element:create', { element: el, pageIndex: activePageIndex });
+        });
+      } else if (actionToRedo.type === 'delete') {
+        const idsToRemove = new Set(actionToRedo.elements.map((el) => el.id));
+        setPages((prevPages) => ({
+          ...prevPages,
+          [activePageIndex]: (prevPages[activePageIndex] || []).filter((el) => !idsToRemove.has(el.id)),
+        }));
+        socket.emit('board:elements:deleteBatch', {
+          elementIds: Array.from(idsToRemove),
+          pageIndex: activePageIndex,
+        });
+      } else if (actionToRedo.type === 'update') {
+        const afterMap = new Map(actionToRedo.after.map((el) => [el.id, el]));
+        setPages((prevPages) => ({
+          ...prevPages,
+          [activePageIndex]: (prevPages[activePageIndex] || []).map((el) => afterMap.get(el.id) || el),
+        }));
+        actionToRedo.after.forEach((el) => {
+          socket.emit('board:element:update', { element: el, pageIndex: activePageIndex });
+        });
       }
 
-      if (!nextState || isSameElementList(nextState, currentList)) {
-        return prevRedo;
-      }
-
-      setUndoStack((prevUndo) => {
+      setUndoActions((prevUndo) => {
         const pageUndo = prevUndo[activePageIndex] || [];
         return {
           ...prevUndo,
-          [activePageIndex]: [...pageUndo, currentList],
+          [activePageIndex]: [...pageUndo, actionToRedo],
         };
-      });
-
-      setPages((prevPages) => ({
-        ...prevPages,
-        [activePageIndex]: nextState!,
-      }));
-
-      const socket = getSocket();
-      socket.emit('board:elements:replace', {
-        pageIndex: activePageIndex,
-        elements: nextState,
       });
 
       return {
@@ -239,7 +274,7 @@ export default function App() {
         [activePageIndex]: pageRedo,
       };
     });
-  }, [activePageIndex, pages]);
+  }, [activePageIndex]);
 
   // Connect & setup socket listeners
   const handleJoinRoom = ({
@@ -274,6 +309,7 @@ export default function App() {
 
     const socket = getSocket();
 
+    // Join payload
     const joinPayload = {
       roomId: targetRoomId,
       userName: targetName,
@@ -283,6 +319,25 @@ export default function App() {
       title: targetTitle,
       subject: targetSubject,
     };
+
+    // Save active room to localStorage for seamless refresh recovery
+    try {
+      localStorage.setItem(
+        ACTIVE_ROOM_KEY,
+        JSON.stringify({
+          roomId: targetRoomId,
+          userName: targetName,
+          role: targetRole,
+          color: targetColor,
+          avatar: targetAvatar || '🎓',
+          title: targetTitle,
+          subject: targetSubject,
+        })
+      );
+      const url = new URL(window.location.href);
+      url.searchParams.set('room', targetRoomId);
+      window.history.replaceState(null, '', url.toString());
+    } catch {}
 
     if (socket.connected) {
       socket.emit('room:join', joinPayload);
@@ -300,6 +355,7 @@ export default function App() {
     socket.off('room:participants');
     socket.off('room:userJoined');
     socket.off('room:userLeft');
+    socket.off('room:kicked');
     socket.off('participant:left');
     socket.off('participant:voice:updated');
     socket.off('participant:updated');
@@ -326,7 +382,19 @@ export default function App() {
 
     socket.on('room:error', (err: { error: string }) => {
       setIsInRoom(false);
+      localStorage.removeItem(ACTIVE_ROOM_KEY);
       showToast(`❌ ${err.error || 'Ошибка подключения к комнате'}`);
+    });
+
+    socket.on('room:kicked', (data: { reason?: string }) => {
+      localStorage.removeItem(ACTIVE_ROOM_KEY);
+      disconnectSocket();
+      voiceManager.cleanup();
+      setIsInRoom(false);
+      const url = new URL(window.location.href);
+      url.searchParams.delete('room');
+      window.history.replaceState(null, '', url.pathname + url.search);
+      showToast(`⚠️ ${data?.reason || 'Вы были исключены из урока преподавателем'}`);
     });
 
     socket.on('room:state', (data: any) => {
@@ -627,6 +695,10 @@ export default function App() {
 
   const handleClearPage = () => {
     if (window.confirm('Очистить всю текущую страницу доски?')) {
+      const cleared = currentElements;
+      if (cleared.length > 0) {
+        handleRecordAction({ type: 'delete', elements: cleared });
+      }
       setCurrentElements([]);
       getSocket().emit('board:page:clear', { pageIndex: activePageIndex });
     }
@@ -635,6 +707,7 @@ export default function App() {
   const handleImageUploaded = (imgEl: ImageElement) => {
     setCurrentElements((prev) => [...prev, imgEl]);
     getSocket().emit('board:element:create', { element: imgEl, pageIndex: activePageIndex });
+    handleRecordAction({ type: 'create', elements: [imgEl] });
   };
 
   const handleExportPNG = () => {
@@ -649,11 +722,61 @@ export default function App() {
 
   const handleLeaveRoom = () => {
     if (window.confirm('Вы уверены, что хотите выйти из комнаты урока?')) {
+      localStorage.removeItem(ACTIVE_ROOM_KEY);
+      try {
+        const url = new URL(window.location.href);
+        url.searchParams.delete('room');
+        window.history.replaceState(null, '', url.pathname + url.search);
+      } catch {}
       disconnectSocket();
       voiceManager.cleanup();
       setIsInRoom(false);
     }
   };
+
+  // Restore active room session on page refresh
+  useEffect(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const queryRoom = urlParams.get('room');
+      const savedActiveRoom = localStorage.getItem(ACTIVE_ROOM_KEY);
+
+      if (savedActiveRoom) {
+        const parsed = JSON.parse(savedActiveRoom);
+        if (parsed && (parsed.roomId || queryRoom)) {
+          const targetRoom = queryRoom || parsed.roomId;
+          const userSession = localStorage.getItem(STORAGE_KEY);
+          let finalName = parsed.userName;
+          let finalRole = parsed.role;
+          let finalAvatar = parsed.avatar;
+          let finalColor = parsed.color;
+
+          if (userSession) {
+            try {
+              const u = JSON.parse(userSession)?.user;
+              if (u) {
+                if (u.name) finalName = u.name;
+                if (u.role) finalRole = u.role;
+                if (u.avatar) finalAvatar = u.avatar;
+              }
+            } catch {}
+          }
+
+          handleJoinRoom({
+            roomId: targetRoom,
+            userName: finalName || 'Пользователь',
+            role: finalRole || 'student',
+            color: finalColor || '#2563EB',
+            avatar: finalAvatar || '🎓',
+            title: parsed.title,
+            subject: parsed.subject,
+          });
+        }
+      }
+    } catch (e) {
+      console.error('Failed to auto-restore room session:', e);
+    }
+  }, []);
 
   const handleSaveKeybinds = (newBinds: KeybindSettings) => {
     setKeybinds(newBinds);
@@ -713,8 +836,8 @@ export default function App() {
   }
 
   const canEdit = !isLocked || userRole === 'tutor';
-  const canUndo = (undoStack[activePageIndex]?.length || 0) > 0;
-  const canRedo = (redoStack[activePageIndex]?.length || 0) > 0;
+  const canUndo = (undoActions[activePageIndex]?.length || 0) > 0;
+  const canRedo = (redoActions[activePageIndex]?.length || 0) > 0;
 
   return (
     <div
@@ -769,6 +892,7 @@ export default function App() {
             background={background}
             elements={currentElements}
             setElements={setCurrentElements}
+            onRecordAction={handleRecordAction}
             pageIndex={activePageIndex}
             isLocked={isLocked}
             userRole={userRole}

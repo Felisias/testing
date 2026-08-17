@@ -13,9 +13,10 @@ import {
   UserRole,
   ToolSpecificSettings,
   DEFAULT_TOOL_SETTINGS,
+  WhiteboardAction,
 } from '../../types';
 import { getSocket } from '../../services/socket';
-import { Sparkles, Trash2, Move, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { Sparkles, Trash2, Move, ZoomIn, ZoomOut, RotateCcw, Navigation } from 'lucide-react';
 
 interface CanvasProps {
   tool: ToolType;
@@ -39,6 +40,7 @@ interface CanvasProps {
   addLaserPoint: (p: LaserPoint) => void;
   activeMathInsert?: string;
   onMathInserted?: () => void;
+  onRecordAction?: (action: WhiteboardAction) => void;
 }
 
 export const Canvas: React.FC<CanvasProps> = ({
@@ -61,9 +63,31 @@ export const Canvas: React.FC<CanvasProps> = ({
   addLaserPoint,
   activeMathInsert,
   onMathInserted,
+  onRecordAction,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const [containerDimensions, setContainerDimensions] = useState<{ width: number; height: number }>({
+    width: typeof window !== 'undefined' ? window.innerWidth : 1200,
+    height: typeof window !== 'undefined' ? window.innerHeight : 800,
+  });
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        if (entry.contentRect) {
+          setContainerDimensions({
+            width: entry.contentRect.width || 1200,
+            height: entry.contentRect.height || 800,
+          });
+        }
+      }
+    });
+    observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
   const [isDrawing, setIsDrawing] = useState(false);
   const [currentStroke, setCurrentStroke] = useState<Point[]>([]);
   const [shapeStart, setShapeStart] = useState<Point | null>(null);
@@ -805,7 +829,15 @@ export const Canvas: React.FC<CanvasProps> = ({
       const updated = elements.find((el) => el.id === selectedElementId);
       if (updated) {
         getSocket().emit('board:element:update', { element: updated, pageIndex });
+        if (dragOriginalElementRef.current) {
+          onRecordAction?.({
+            type: 'update',
+            before: [dragOriginalElementRef.current],
+            after: [updated],
+          });
+        }
       }
+      dragOriginalElementRef.current = null;
       setDragStartPoint(null);
       setElementOriginalPos(null);
       return;
@@ -836,6 +868,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       setElements((prev) => [...prev, newStroke]);
       getSocket().emit('board:element:create', { element: newStroke, pageIndex });
+      onRecordAction?.({ type: 'create', elements: [newStroke] });
       setCurrentStroke([]);
     }
 
@@ -873,6 +906,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
         setElements((prev) => [...prev, newShape]);
         getSocket().emit('board:element:create', { element: newShape, pageIndex });
+        onRecordAction?.({ type: 'create', elements: [newShape] });
       }
 
       setShapeStart(null);
@@ -908,8 +942,12 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     if (toDeleteIds.length > 0) {
       const deleteSet = new Set(toDeleteIds);
+      const erasedElements = elements.filter((el) => deleteSet.has(el.id));
       setElements((prev) => prev.filter((el) => !deleteSet.has(el.id)));
       getSocket().emit('board:elements:deleteBatch', { elementIds: toDeleteIds, pageIndex });
+      if (erasedElements.length > 0) {
+        onRecordAction?.({ type: 'delete', elements: erasedElements });
+      }
     }
   };
 
@@ -937,6 +975,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
     setElements((prev) => [...prev, newText]);
     getSocket().emit('board:element:create', { element: newText, pageIndex });
+    onRecordAction?.({ type: 'create', elements: [newText] });
     setTextInputPos(null);
     setTextInputValue('');
   };
@@ -977,8 +1016,12 @@ export const Canvas: React.FC<CanvasProps> = ({
   // Delete selected element
   const deleteSelected = () => {
     if (!selectedElementId) return;
+    const target = elements.find((el) => el.id === selectedElementId);
     setElements((prev) => prev.filter((el) => el.id !== selectedElementId));
     getSocket().emit('board:element:delete', { elementId: selectedElementId, pageIndex });
+    if (target) {
+      onRecordAction?.({ type: 'delete', elements: [target] });
+    }
     setSelectedElementId(null);
   };
 
@@ -1023,6 +1066,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
         setElements((prev) => [...prev, newImg]);
         getSocket().emit('board:element:create', { element: newImg, pageIndex });
+        onRecordAction?.({ type: 'create', elements: [newImg] });
         setSelectedElementId(newImg.id);
         render();
       };
@@ -1126,6 +1170,7 @@ export const Canvas: React.FC<CanvasProps> = ({
 
         setElements((prev) => [...prev, cloned]);
         getSocket().emit('board:element:create', { element: cloned, pageIndex });
+        onRecordAction?.({ type: 'create', elements: [cloned] });
         setSelectedElementId(newId);
         copiedElementRef.current = cloned;
       }
@@ -1189,37 +1234,101 @@ export const Canvas: React.FC<CanvasProps> = ({
     >
       <canvas ref={canvasRef} className="absolute inset-0 block w-full h-full" />
 
-      {/* Real-time Multiplayer Cursors */}
+      {/* Real-time Multiplayer Cursors & Off-screen Indicators */}
       {(Object.values(cursors) as CursorPosition[]).map((cur) => {
         if (cur.userId === 'self') return null;
         const screenX = cur.x * zoom + panOffset.x;
         const screenY = cur.y * zoom + panOffset.y;
 
+        const w = containerDimensions.width;
+        const h = containerDimensions.height;
+        const margin = 16;
+        const isVisible =
+          screenX >= margin && screenX <= w - margin && screenY >= margin && screenY <= h - margin;
+
+        if (isVisible) {
+          return (
+            <div
+              key={cur.userId}
+              className="absolute pointer-events-none transition-transform duration-75 flex items-start gap-1 z-30"
+              style={{
+                transform: `translate(${screenX}px, ${screenY}px)`,
+              }}
+            >
+              <svg
+                className="w-4 h-4 drop-shadow"
+                viewBox="0 0 24 24"
+                fill={cur.color || '#3B82F6'}
+                stroke="#FFFFFF"
+                strokeWidth="1.5"
+              >
+                <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87a.5.5 0 0 0 .35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z" />
+              </svg>
+              <span
+                className="px-2 py-0.5 rounded-lg text-[11px] font-semibold text-white shadow-md whitespace-nowrap flex items-center gap-1"
+                style={{ backgroundColor: cur.color || '#3B82F6' }}
+              >
+                <span>{cur.avatar || (cur.role === 'tutor' ? '👨‍🏫' : '🎓')}</span>
+                <span>{cur.userName}</span>
+              </span>
+            </div>
+          );
+        }
+
+        // Off-screen indicator calculation
+        const cx = w / 2;
+        const cy = h / 2;
+        const dx = screenX - cx;
+        const dy = screenY - cy;
+        const angleRad = Math.atan2(dy, dx);
+        const angleDeg = (angleRad * 180) / Math.PI;
+
+        const padX = 75;
+        const padY = 40;
+        let t = 1;
+        if (Math.abs(dx) > 0.001) {
+          const tx = dx > 0 ? (w - padX - cx) / dx : (padX - cx) / dx;
+          t = Math.min(t, Math.max(0, tx));
+        }
+        if (Math.abs(dy) > 0.001) {
+          const ty = dy > 0 ? (h - padY - cy) / dy : (padY - cy) / dy;
+          t = Math.min(t, Math.max(0, ty));
+        }
+
+        const edgeX = cx + dx * t;
+        const edgeY = cy + dy * t;
+
         return (
-          <div
-            key={cur.userId}
-            className="absolute pointer-events-none transition-transform duration-75 flex items-start gap-1 z-30"
+          <button
+            key={`offscreen-${cur.userId}`}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setPanOffset({
+                x: w / 2 - cur.x * zoom,
+                y: h / 2 - cur.y * zoom,
+              });
+            }}
+            title={`Курсор пользователя ${cur.userName} находится за экраном. Нажмите, чтобы перейти к нему`}
+            className="absolute z-30 -translate-x-1/2 -translate-y-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full shadow-xl border border-white/80 text-white text-xs font-semibold cursor-pointer transition-transform hover:scale-110 active:scale-95"
             style={{
-              transform: `translate(${screenX}px, ${screenY}px)`,
+              left: `${edgeX}px`,
+              top: `${edgeY}px`,
+              backgroundColor: cur.color || '#3B82F6',
+              boxShadow: `0 4px 16px ${cur.color || '#3B82F6'}88`,
             }}
           >
-            <svg
-              className="w-4 h-4 drop-shadow"
-              viewBox="0 0 24 24"
-              fill={cur.color || '#3B82F6'}
-              stroke="#FFFFFF"
-              strokeWidth="1.5"
-            >
-              <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87a.5.5 0 0 0 .35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z" />
-            </svg>
-            <span
-              className="px-2 py-0.5 rounded-lg text-[11px] font-semibold text-white shadow-md whitespace-nowrap flex items-center gap-1"
-              style={{ backgroundColor: cur.color || '#3B82F6' }}
-            >
+            <Navigation
+              className="w-3.5 h-3.5 flex-shrink-0"
+              style={{
+                transform: `rotate(${angleDeg - 45}deg)`,
+              }}
+            />
+            <span className="text-[11px] leading-none flex items-center gap-1 max-w-[110px] truncate">
               <span>{cur.avatar || (cur.role === 'tutor' ? '👨‍🏫' : '🎓')}</span>
-              <span>{cur.userName}</span>
+              <span className="truncate">{cur.userName}</span>
             </span>
-          </div>
+          </button>
         );
       })}
 

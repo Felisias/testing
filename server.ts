@@ -80,6 +80,19 @@ interface UserRecord {
   }[];
 }
 
+interface InviteCodeRecord {
+  code: string;
+  roomId: string;
+  roomTitle: string;
+  subject: string;
+  createdBy: string;
+  createdAt: number;
+  used: boolean;
+  usedBy?: string;
+  usedByName?: string;
+  usedAt?: number;
+}
+
 const users: { [username: string]: UserRecord } = {
   // Default demo tutor account
   tutor: {
@@ -103,6 +116,7 @@ const users: { [username: string]: UserRecord } = {
   },
 };
 
+const inviteCodes: { [code: string]: InviteCodeRecord } = {};
 const rooms: { [roomId: string]: RoomData } = {};
 
 function normalizeRoomId(rawId: string): string {
@@ -602,6 +616,150 @@ async function startServer() {
       boardsCount: u.savedBoards ? u.savedBoards.length : 0,
     }));
     return res.json({ users: userList });
+  });
+
+  // Get users with full saved boards list (for tutor board access management)
+  app.get('/api/users-with-boards', (req, res) => {
+    const userList = Object.values(users).map((u) => ({
+      id: u.id,
+      username: u.username,
+      name: u.name,
+      role: u.role,
+      avatar: u.avatar || (u.role === 'tutor' ? '👨‍🏫' : '🎓'),
+      createdAt: u.createdAt,
+      savedBoards: u.savedBoards || [],
+    }));
+    return res.json({ users: userList });
+  });
+
+  // Revoke a user's access to a board
+  app.post('/api/users/revoke-access', (req, res) => {
+    const { username, roomId } = req.body;
+    const cleanUsername = String(username || '').trim().toLowerCase();
+    const targetUser = users[cleanUsername];
+    if (!targetUser) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+
+    const normRoomId = normalizeRoomId(roomId);
+    targetUser.savedBoards = (targetUser.savedBoards || []).filter(
+      (b) => normalizeRoomId(b.id) !== normRoomId
+    );
+
+    // If target user is actively in this room on socket, notify and kick them
+    const room = findRoom(normRoomId);
+    if (room) {
+      Object.entries(room.participants).forEach(([sockId, p]) => {
+        if (p.userId === targetUser.id || p.name.toLowerCase() === targetUser.name.toLowerCase()) {
+          io.to(sockId).emit('room:kicked', {
+            reason: `Преподаватель отозвал ваш доступ к доске ${normRoomId}.`,
+          });
+          delete room.participants[sockId];
+          io.to(room.id).emit('room:participants', Object.values(room.participants));
+        }
+      });
+    }
+
+    return res.json({ success: true, savedBoards: targetUser.savedBoards });
+  });
+
+  // Create One-time Invite Code (Tutor only)
+  app.post('/api/rooms/:roomId/invite-code', (req, res) => {
+    const rawId = req.params.roomId;
+    const { createdBy, roomTitle, subject } = req.body;
+    const normRoomId = normalizeRoomId(rawId);
+    const room = getOrCreateRoom(normRoomId, roomTitle, subject);
+
+    // Generate unique 8-character invite code e.g. "INV-7K9A"
+    const randomChars = Math.random().toString(36).substring(2, 6).toUpperCase();
+    const code = `INV-${randomChars}`;
+
+    const record: InviteCodeRecord = {
+      code,
+      roomId: room.id,
+      roomTitle: room.title || roomTitle || 'Урок',
+      subject: room.subject || subject || 'Математика',
+      createdBy: createdBy || 'tutor',
+      createdAt: Date.now(),
+      used: false,
+    };
+
+    inviteCodes[code] = record;
+    return res.json({ success: true, inviteCode: record });
+  });
+
+  // Get active invite codes for a room
+  app.get('/api/rooms/:roomId/invite-codes', (req, res) => {
+    const rawId = req.params.roomId;
+    const normRoomId = normalizeRoomId(rawId);
+    const roomCodes = Object.values(inviteCodes).filter(
+      (c) => normalizeRoomId(c.roomId) === normRoomId
+    );
+    return res.json({ inviteCodes: roomCodes });
+  });
+
+  // Redeem / Use One-time Invite Code
+  app.post('/api/invite-code/redeem', (req, res) => {
+    const { code, username, name } = req.body;
+    if (!code) {
+      return res.status(400).json({ error: 'Введите ключ приглашения' });
+    }
+
+    const cleanCode = String(code).trim().toUpperCase();
+    const record = inviteCodes[cleanCode];
+
+    if (!record) {
+      return res.status(404).json({ error: 'Одноразовый ключ не найден или введен неверно' });
+    }
+
+    if (record.used) {
+      return res.status(400).json({
+        error: `Этот ключ уже был использован ${
+          record.usedByName ? `пользователем ${record.usedByName}` : ''
+        }. Запросите новый ключ у преподавателя.`,
+      });
+    }
+
+    // Mark as used
+    record.used = true;
+    record.usedBy = username || 'guest';
+    record.usedByName = name || username || 'Ученик';
+    record.usedAt = Date.now();
+
+    // Ensure room exists
+    const room = getOrCreateRoom(record.roomId, record.roomTitle, record.subject);
+
+    // If student is logged in, automatically save this board to their account
+    if (username) {
+      const cleanUsername = String(username).trim().toLowerCase();
+      const user = users[cleanUsername];
+      if (user) {
+        const existingIdx = user.savedBoards.findIndex(
+          (b) => normalizeRoomId(b.id) === normalizeRoomId(room.id)
+        );
+        const entry = {
+          id: room.id,
+          title: room.title,
+          subject: room.subject,
+          role: 'student' as const,
+          lastVisited: Date.now(),
+          totalPages: room.totalPages || 1,
+        };
+        if (existingIdx !== -1) {
+          user.savedBoards[existingIdx] = entry;
+        } else {
+          user.savedBoards.unshift(entry);
+        }
+      }
+    }
+
+    return res.json({
+      success: true,
+      roomId: room.id,
+      title: room.title,
+      subject: room.subject,
+      inviteCode: record,
+    });
   });
 
   app.get('/api/rooms/:roomId', (req, res) => {
@@ -1156,6 +1314,44 @@ async function startServer() {
       };
       io.to(currentRoomId).emit('tutor:attention:ping', pingPayload);
       io.to(currentRoomId).emit('tutor:attentioned', pingPayload);
+    });
+
+    // Tutor kicks a participant from the room
+    socket.on('room:kick:user', ({ targetSocketId, targetName, reason }: { targetSocketId: string; targetName?: string; reason?: string }) => {
+      if (!currentRoomId || !rooms[currentRoomId] || currentUser?.role !== 'tutor') return;
+      const room = rooms[currentRoomId];
+      const target = room.participants[targetSocketId];
+
+      const kickReason = reason || 'Преподаватель исключил вас из занятия.';
+
+      // Notify target socket
+      io.to(targetSocketId).emit('room:kicked', {
+        reason: kickReason,
+      });
+
+      // Remove from room participants
+      delete room.participants[targetSocketId];
+
+      const kickMsg: ChatMessage = {
+        id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+        userId: 'system',
+        userName: 'Система',
+        role: 'tutor',
+        text: `${target?.name || targetName || 'Пользователь'} был исключен преподавателем из занятия.`,
+        timestamp: Date.now(),
+      };
+      room.chatMessages.push(kickMsg);
+
+      io.to(currentRoomId).emit('participant:left', {
+        userId: targetSocketId,
+        userName: target?.name || targetName,
+      });
+      io.to(currentRoomId).emit('room:userLeft', {
+        userId: targetSocketId,
+        userName: target?.name || targetName,
+      });
+      io.to(currentRoomId).emit('room:participants', Object.values(room.participants));
+      io.to(currentRoomId).emit('chat:message', kickMsg);
     });
 
     // Disconnect handler

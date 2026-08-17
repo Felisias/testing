@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { UserRole, Participant } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { UsersListModal } from './UsersListModal';
+import { InviteCodeModal } from './InviteCodeModal';
 import { getSocket } from '../../services/socket';
 import confetti from 'canvas-confetti';
 import {
@@ -26,6 +27,7 @@ import {
   Code2,
   Layout,
   UserCheck,
+  KeyRound,
 } from 'lucide-react';
 
 interface RoomHeaderProps {
@@ -71,6 +73,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   const [copiedLink, setCopiedLink] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [showUsersModal, setShowUsersModal] = useState(false);
+  const [showInviteCodeModal, setShowInviteCodeModal] = useState(false);
 
   // Lesson Timer state (synchronized via server sockets)
   const [timerSeconds, setTimerSeconds] = useState(45 * 60); // 45 min default
@@ -430,20 +433,35 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
 
       {/* Right: Tools, Settings, Tutor Controls & Actions */}
       <div className="flex items-center gap-2">
-        {/* Tutor: View all users button */}
+        {/* Tutor: View all users and board access */}
         {userRole === 'tutor' && (
-          <button
-            onClick={() => setShowUsersModal(true)}
-            title="Список всех зарегистрированных пользователей сайта"
-            className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
-              isDarkTheme
-                ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
-                : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
-            }`}
-          >
-            <UserCheck className="w-4 h-4 text-blue-500" />
-            <span className="hidden xl:inline">Пользователи</span>
-          </button>
+          <>
+            <button
+              onClick={() => setShowInviteCodeModal(true)}
+              title="Создать одноразовый ключ доступа для ученика"
+              className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                isDarkTheme
+                  ? 'bg-amber-950/50 border-amber-800/80 text-amber-300 hover:bg-amber-900/60'
+                  : 'bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100'
+              }`}
+            >
+              <KeyRound className="w-4 h-4 text-amber-500" />
+              <span className="hidden xl:inline">Одноразовый ключ</span>
+            </button>
+
+            <button
+              onClick={() => setShowUsersModal(true)}
+              title="Список всех пользователей и управление доступом к доскам"
+              className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                isDarkTheme
+                  ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
+                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <UserCheck className="w-4 h-4 text-blue-500" />
+              <span className="hidden xl:inline">Пользователи</span>
+            </button>
+          </>
         )}
 
         {/* Settings button */}
@@ -672,6 +690,16 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
 
       {/* Users List Modal for Tutors */}
       <UsersListModal isOpen={showUsersModal} onClose={() => setShowUsersModal(false)} />
+
+      {/* Invite Code Generator Modal for Tutors */}
+      <InviteCodeModal
+        isOpen={showInviteCodeModal}
+        onClose={() => setShowInviteCodeModal(false)}
+        roomId={roomId}
+        roomTitle={roomTitle}
+        subject={subject}
+        userName={userName}
+      />
     </header>
   );
 };

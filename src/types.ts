@@ -210,3 +210,42 @@ export interface VoiceSignalData {
   signal: any;
   type: 'offer' | 'answer' | 'ice-candidate';
 }
+
+export interface InviteCodeRecord {
+  code: string;
+  roomId: string;
+  roomTitle: string;
+  subject: string;
+  createdBy: string;
+  createdAt: number;
+  used: boolean;
+  usedBy?: string;
+  usedByName?: string;
+  usedAt?: number;
+}
+
+export interface UserWithBoards {
+  id: string;
+  username: string;
+  name: string;
+  role: UserRole;
+  avatar: string;
+  createdAt: number;
+  savedBoards: SavedBoard[];
+}
+
+export type WhiteboardAction =
+  | {
+      type: 'create';
+      elements: WhiteboardElement[];
+    }
+  | {
+      type: 'delete';
+      elements: WhiteboardElement[];
+    }
+  | {
+      type: 'update';
+      before: WhiteboardElement[];
+      after: WhiteboardElement[];
+    };
+

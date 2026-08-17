@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Participant, UserRole } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { getSocket } from '../../services/socket';
@@ -9,6 +9,7 @@ import {
   MicOff,
   Star,
   Crown,
+  UserX,
 } from 'lucide-react';
 
 interface ParticipantsDrawerProps {
@@ -28,6 +29,8 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
   userRole,
   onChangeAvatar,
 }) => {
+  const [kickConfirmTarget, setKickConfirmTarget] = useState<Participant | null>(null);
+
   if (!isOpen) return null;
 
   const list = Object.values(participants) as Participant[];
@@ -36,6 +39,15 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
     getSocket().emit('tutor:cheer', {
       message: `Превосходно решено, ${studentName}! Отличный результат! 🌟`,
     });
+  };
+
+  const handleKick = (p: Participant) => {
+    getSocket().emit('room:kick:user', {
+      targetSocketId: p.id,
+      targetName: p.name,
+      reason: 'Преподаватель исключил вас из занятия.',
+    });
+    setKickConfirmTarget(null);
   };
 
   return (
@@ -140,9 +152,20 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
                   <button
                     onClick={() => handlePraise(p.name)}
                     title={`Похвалить ${p.name}`}
-                    className="p-1.5 hover:bg-amber-100 text-amber-600 rounded-lg transition"
+                    className="p-1.5 hover:bg-amber-100 text-amber-600 rounded-lg transition cursor-pointer"
                   >
                     <Star className="w-3.5 h-3.5" />
+                  </button>
+                )}
+
+                {/* Tutor kick action for non-tutor participants */}
+                {userRole === 'tutor' && !isSelf && (
+                  <button
+                    onClick={() => setKickConfirmTarget(p)}
+                    title={`Исключить ${p.name} из урока`}
+                    className="p-1.5 hover:bg-rose-100 text-rose-500 hover:text-rose-700 rounded-lg transition cursor-pointer"
+                  >
+                    <UserX className="w-3.5 h-3.5" />
                   </button>
                 )}
               </div>
@@ -150,6 +173,32 @@ export const ParticipantsDrawer: React.FC<ParticipantsDrawerProps> = ({
           );
         })}
       </div>
+
+      {/* Kick Confirmation Dialog */}
+      {kickConfirmTarget && (
+        <div className="p-3 bg-rose-50 border-t border-rose-200 animate-in slide-in-from-bottom-2 text-xs space-y-2">
+          <p className="font-bold text-rose-900">
+            Исключить {kickConfirmTarget.name} из занятия?
+          </p>
+          <p className="text-[11px] text-rose-700">
+            Пользователь будет отключен от доски и голосового чата.
+          </p>
+          <div className="flex items-center gap-2 pt-1">
+            <button
+              onClick={() => handleKick(kickConfirmTarget)}
+              className="flex-1 py-1.5 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-bold text-[11px] transition cursor-pointer"
+            >
+              Да, исключить
+            </button>
+            <button
+              onClick={() => setKickConfirmTarget(null)}
+              className="flex-1 py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 rounded-lg font-semibold text-[11px] transition cursor-pointer"
+            >
+              Отмена
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="p-3 border-t border-slate-200 bg-slate-50 flex items-center justify-between text-[11px] text-slate-600">
         <span>💡 Голосовая связь и доска активны</span>
