@@ -94,10 +94,10 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
   const [isRefreshingStatuses, setIsRefreshingStatuses] = useState(false);
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
 
-  // Active Dialog / Action: null | 'join-code' | 'create-room' | 'auth'
-  const [activeDialog, setActiveDialog] = useState<'join-code' | 'create-room' | 'auth' | null>(null);
+  // Active Dialog on Dashboard: null | 'join-code' | 'create-room'
+  const [activeDialog, setActiveDialog] = useState<'join-code' | 'create-room' | null>(null);
 
-  // Auth Modes: 'login' | 'register' | 'guest'
+  // Auth Modes (when not logged in): 'login' | 'register' | 'guest'
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'guest'>('login');
 
   // Form Fields - Login
@@ -122,7 +122,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
   // Join by Code Dialog State
   const [inviteKeyInput, setInviteKeyInput] = useState('');
 
-  // Create Room Dialog State
+  // Create Room Dialog State (Tutor only)
   const [roomIcon, setRoomIcon] = useState('🎓');
   const [lessonTitle, setLessonTitle] = useState('Урок с преподавателем');
   const [lessonSubject, setLessonSubject] = useState('Математика');
@@ -161,14 +161,14 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
 
   // Poll room statuses periodically
   useEffect(() => {
-    if (savedBoards.length > 0) {
+    if (currentUser && savedBoards.length > 0) {
       fetchRoomStatuses(savedBoards);
       const interval = setInterval(() => {
         fetchRoomStatuses(savedBoards);
       }, 5000);
       return () => clearInterval(interval);
     }
-  }, [savedBoards, fetchRoomStatuses]);
+  }, [currentUser, savedBoards, fetchRoomStatuses]);
 
   // Load session & history
   useEffect(() => {
@@ -214,7 +214,6 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
       } else {
         if (localRecent.length > 0) {
           setSavedBoards(localRecent);
-          fetchRoomStatuses(localRecent);
         }
       }
     } catch (err) {
@@ -230,9 +229,13 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
       const code = urlInvite.trim().toUpperCase();
       setInviteKeyInput(code);
       setGuestInviteCode(code);
-      setActiveDialog('join-code');
+      if (!currentUser) {
+        setAuthMode('guest');
+      } else {
+        setActiveDialog('join-code');
+      }
     }
-  }, []);
+  }, [currentUser]);
 
   const saveRoomToHistory = (id: string, title: string, subject: string, role: UserRole) => {
     const entry: SavedBoard = {
@@ -299,6 +302,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
       if (user.avatar) setRegAvatar(user.avatar);
       localStorage.setItem(STORAGE_KEY, JSON.stringify({ user, savedBoards: boards }));
       setActiveDialog(null);
+      fetchRoomStatuses(boards);
     } catch (err: any) {
       setAuthError(err.message || 'Ошибка авторизации');
     } finally {
@@ -441,7 +445,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     }
   };
 
-  // Handle Join by Code (Logged-in or quick)
+  // Handle Join by Code (Logged-in)
   const handleJoinByCodeSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError(null);
@@ -478,10 +482,10 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     }
   };
 
-  // Handle Tutor Creating a New Room
+  // Handle Tutor Creating a New Room (Tutor only)
   const handleCreateRoomSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!currentUser) return;
+    if (!currentUser || currentUser.role !== 'tutor') return;
     setAuthError(null);
 
     const randomNum = Math.floor(1000 + Math.random() * 9000);
@@ -489,7 +493,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     const title = `${roomIcon} ${lessonTitle.trim() || 'Урок'}`;
     const subject = lessonSubject.trim() || 'Занятие';
 
-    saveRoomToHistory(targetCode, title, subject, currentUser.role);
+    saveRoomToHistory(targetCode, title, subject, 'tutor');
 
     onJoinRoom({
       roomId: targetCode,
@@ -532,6 +536,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     setCurrentUser(null);
     setAuthMode('login');
     setAuthError(null);
+    setActiveDialog(null);
   };
 
   // Paste from clipboard helper
@@ -564,6 +569,378 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
 
   const isTutor = currentUser?.role === 'tutor';
 
+  // =========================================================================
+  // CASE 1: USER IS NOT LOGGED IN -> SHOW CLEAN AUTHENTICATION / LOGIN PAGE
+  // =========================================================================
+  if (!currentUser) {
+    return (
+      <div
+        id="tutorboard-auth-screen"
+        className="min-h-screen w-full bg-slate-50 text-slate-800 flex flex-col justify-center items-center p-4 selection:bg-blue-600 selection:text-white relative overflow-hidden"
+      >
+        {/* Soft background glow */}
+        <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[550px] h-[340px] bg-gradient-to-tr from-blue-200/50 via-indigo-100/30 to-transparent rounded-full blur-3xl pointer-events-none" />
+
+        {/* Global Toast */}
+        {copiedNotification && (
+          <div className="fixed top-5 left-1/2 -translate-x-1/2 z-50 px-4 py-2 bg-slate-900 text-white rounded-full text-xs font-semibold shadow-lg flex items-center gap-2 animate-in fade-in">
+            <Check className="w-3.5 h-3.5 text-emerald-400" />
+            <span>{copiedNotification}</span>
+          </div>
+        )}
+
+        <div className="w-full max-w-[440px] z-10">
+          {/* Main Card */}
+          <div className="bg-white/95 backdrop-blur-xl border border-slate-200/90 rounded-3xl shadow-xl shadow-slate-200/60 overflow-hidden">
+            {/* Header */}
+            <div className="p-6 pb-4 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-2xl bg-blue-600 flex items-center justify-center text-white shadow-md shadow-blue-600/20">
+                  <GraduationCap className="w-5 h-5" />
+                </div>
+                <div>
+                  <h1 className="text-base font-bold tracking-tight text-slate-900">TutorBoard</h1>
+                  <p className="text-xs text-slate-500">Интерактивная доска для занятий</p>
+                </div>
+              </div>
+            </div>
+
+            {/* Body */}
+            <div className="p-6">
+              {/* Error Box */}
+              {authError && (
+                <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
+                  <span className="font-medium">{authError}</span>
+                </div>
+              )}
+
+              {/* Mode Tabs: Вход | Регистрация | Гость */}
+              <div className="grid grid-cols-3 gap-1 bg-slate-100/90 p-1 rounded-2xl border border-slate-200/70 mb-5">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('login');
+                    setAuthError(null);
+                  }}
+                  className={`py-2 px-2 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                    authMode === 'login'
+                      ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <KeyRound className="w-3.5 h-3.5" />
+                  <span>Вход</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('register');
+                    setAuthError(null);
+                  }}
+                  className={`py-2 px-2 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                    authMode === 'register'
+                      ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
+                  <span>Регистрация</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setAuthMode('guest');
+                    setAuthError(null);
+                  }}
+                  className={`py-2 px-2 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
+                    authMode === 'guest'
+                      ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
+                      : 'text-slate-500 hover:text-slate-800'
+                  }`}
+                >
+                  <Compass className="w-3.5 h-3.5" />
+                  <span>Гость</span>
+                </button>
+              </div>
+
+              {/* 1. LOGIN FORM */}
+              {authMode === 'login' && (
+                <form onSubmit={handleLogin} className="space-y-3.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Логин
+                    </label>
+                    <div className="relative">
+                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type="text"
+                        required
+                        value={loginUsername}
+                        onChange={(e) => setLoginUsername(e.target.value)}
+                        placeholder="Введите ваш логин"
+                        className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl pl-10 pr-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 transition outline-none"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Пароль
+                    </label>
+                    <div className="relative">
+                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <input
+                        type={showLoginPassword ? 'text' : 'password'}
+                        required
+                        value={loginPassword}
+                        onChange={(e) => setLoginPassword(e.target.value)}
+                        placeholder="Ваш пароль"
+                        className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-900 placeholder-slate-400 transition outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => setShowLoginPassword(!showLoginPassword)}
+                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                      >
+                        {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                      </button>
+                    </div>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full h-11 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 mt-2 cursor-pointer"
+                  >
+                    <span>{authLoading ? 'Вход...' : 'Войти в аккаунт'}</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </form>
+              )}
+
+              {/* 2. REGISTER FORM */}
+              {authMode === 'register' && (
+                <form onSubmit={handleRegister} className="space-y-3">
+                  <div className="flex items-center gap-3 p-2.5 bg-slate-50/80 border border-slate-200 rounded-2xl">
+                    <button
+                      type="button"
+                      onClick={() => setShowAvatarModal(true)}
+                      className="relative group shrink-0 cursor-pointer"
+                      title="Выбрать аватарку"
+                    >
+                      <UserAvatar
+                        avatar={regAvatar}
+                        name={regName || 'Пользователь'}
+                        color={userColor}
+                        size="md"
+                        className="ring-2 ring-blue-500/30 group-hover:scale-105 transition"
+                      />
+                      <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center text-[9px] shadow-sm">
+                        ✎
+                      </span>
+                    </button>
+
+                    <div className="flex-1 min-w-0">
+                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
+                        Ваше Имя
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={regName}
+                        onChange={(e) => setRegName(e.target.value)}
+                        placeholder="Например: Иван Иванов"
+                        className="w-full bg-transparent border-0 text-xs font-semibold text-slate-900 placeholder-slate-400 focus:outline-none p-0"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Логин
+                      </label>
+                      <input
+                        type="text"
+                        required
+                        value={regUsername}
+                        onChange={(e) => setRegUsername(e.target.value)}
+                        placeholder="ivan123"
+                        className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                        Пароль
+                      </label>
+                      <div className="relative">
+                        <input
+                          type={showRegPassword ? 'text' : 'password'}
+                          required
+                          value={regPassword}
+                          onChange={(e) => setRegPassword(e.target.value)}
+                          placeholder="Пароль"
+                          className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none pr-7"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setShowRegPassword(!showRegPassword)}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                        >
+                          {showRegPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Role Segment */}
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Ваша роль
+                    </label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => setRegRole('student')}
+                        className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 cursor-pointer ${
+                          regRole === 'student'
+                            ? 'bg-blue-50/70 border-blue-500 text-slate-900 ring-1 ring-blue-500/20'
+                            : 'bg-slate-50/70 hover:bg-slate-100/70 border-slate-200 text-slate-600'
+                        }`}
+                      >
+                        <span className="text-lg">🎓</span>
+                        <div>
+                          <div className="text-xs font-bold text-slate-900">Ученик</div>
+                          <div className="text-[10px] text-slate-500">Подключение к урокам</div>
+                        </div>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => setRegRole('tutor')}
+                        className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 cursor-pointer ${
+                          regRole === 'tutor'
+                            ? 'bg-blue-50/70 border-blue-500 text-slate-900 ring-1 ring-blue-500/20'
+                            : 'bg-slate-50/70 hover:bg-slate-100/70 border-slate-200 text-slate-600'
+                        }`}
+                      >
+                        <span className="text-lg">👨‍🏫</span>
+                        <div>
+                          <div className="text-xs font-bold text-slate-900">Преподаватель</div>
+                          <div className="text-[10px] text-slate-500">Создание комнат</div>
+                        </div>
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Tutor Key Input (If tutor role selected) */}
+                  {regRole === 'tutor' && (
+                    <div className="p-3 bg-amber-50/80 border border-amber-200/90 rounded-2xl space-y-1.5 animate-in fade-in duration-150">
+                      <label className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5">
+                        <ShieldCheck className="w-3.5 h-3.5 text-amber-600" />
+                        <span>Секретный ключ преподавателя:</span>
+                      </label>
+                      <input
+                        type="password"
+                        value={regTutorCode}
+                        onChange={(e) => setRegTutorCode(e.target.value)}
+                        placeholder="Введите секретный ключ"
+                        className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs font-mono text-amber-950 focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                  )}
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full h-11 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 mt-2 cursor-pointer"
+                  >
+                    <span>{authLoading ? 'Создание...' : 'Зарегистрироваться'}</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </form>
+              )}
+
+              {/* 3. GUEST ENTRY FORM */}
+              {authMode === 'guest' && (
+                <form onSubmit={handleGuestEntry} className="space-y-3.5">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
+                      Ваше имя
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={guestName}
+                      onChange={(e) => setGuestName(e.target.value)}
+                      placeholder="Например: Андрей"
+                      className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 outline-none transition"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                        Код или одноразовый ключ:
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => handlePasteClipboard(setGuestInviteCode)}
+                        className="text-[11px] text-amber-600 hover:text-amber-700 font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Clipboard className="w-3 h-3" />
+                        <span>Вставить</span>
+                      </button>
+                    </div>
+                    <input
+                      type="text"
+                      required
+                      value={guestInviteCode}
+                      onChange={(e) => setGuestInviteCode(e.target.value.toUpperCase())}
+                      placeholder="INV-XXXX или ROOM-XXXX"
+                      className="w-full bg-amber-50/50 hover:bg-white focus:bg-white border border-amber-200 focus:border-amber-500 focus:ring-2 focus:ring-amber-100 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-amber-800 placeholder-slate-400 outline-none uppercase tracking-wider text-center transition"
+                    />
+                    <p className="text-[10px] text-slate-400 mt-1">
+                      Ключ выдаётся преподавателем перед занятием
+                    </p>
+                  </div>
+
+                  <button
+                    type="submit"
+                    disabled={authLoading}
+                    className="w-full h-11 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 cursor-pointer mt-2"
+                  >
+                    <span>{authLoading ? 'Вход...' : 'Войти гостем'}</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                </form>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Avatar Picker Modal */}
+        <AvatarPicker
+          isOpen={showAvatarModal}
+          onClose={() => setShowAvatarModal(false)}
+          selectedAvatar={regAvatar}
+          selectedColor={userColor}
+          userName={regName || 'Пользователь'}
+          onSelectAvatar={(av, col) => {
+            setRegAvatar(av);
+            if (col) setUserColor(col);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // =========================================================================
+  // CASE 2: USER IS LOGGED IN -> FULL-WIDTH MINIMALIST DASHBOARD
+  // =========================================================================
   return (
     <div
       id="tutorboard-hub"
@@ -600,95 +977,67 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
 
           {/* Top Right: User Profile & Actions */}
           <div className="flex items-center gap-3">
-            {currentUser ? (
-              <div className="flex items-center gap-3 pl-3 pr-2 py-1.5 bg-slate-100/80 border border-slate-200/80 rounded-2xl">
-                {/* Avatar with click-to-change */}
-                <button
-                  type="button"
-                  onClick={() => setShowAvatarModal(true)}
-                  title="Нажмите, чтобы изменить аватар"
-                  className="relative group cursor-pointer shrink-0"
-                >
-                  <UserAvatar
-                    avatar={currentUser.avatar || regAvatar}
-                    name={currentUser.name}
-                    color={userColor}
-                    size="sm"
-                    className="ring-1.5 ring-blue-500/40 group-hover:scale-105 transition"
-                  />
-                  <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-blue-600 text-white flex items-center justify-center text-[7px] shadow-sm">
-                    ✎
-                  </span>
-                </button>
+            <div className="flex items-center gap-3 pl-3 pr-2 py-1.5 bg-slate-100/80 border border-slate-200/80 rounded-2xl">
+              {/* Avatar with click-to-change */}
+              <button
+                type="button"
+                onClick={() => setShowAvatarModal(true)}
+                title="Нажмите, чтобы изменить аватар"
+                className="relative group cursor-pointer shrink-0"
+              >
+                <UserAvatar
+                  avatar={currentUser.avatar || regAvatar}
+                  name={currentUser.name}
+                  color={userColor}
+                  size="sm"
+                  className="ring-1.5 ring-blue-500/40 group-hover:scale-105 transition"
+                />
+                <span className="absolute -bottom-1 -right-1 w-3.5 h-3.5 rounded-full bg-blue-600 text-white flex items-center justify-center text-[7px] shadow-sm">
+                  ✎
+                </span>
+              </button>
 
-                {/* Name & Role */}
-                <div className="flex flex-col text-left">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs font-bold text-slate-900 max-w-[120px] sm:max-w-[160px] truncate">
-                      {currentUser.name}
-                    </span>
-                    <span
-                      className={`px-1.5 py-0.2 rounded-md text-[10px] font-semibold ${
-                        isTutor ? 'bg-amber-100 text-amber-900' : 'bg-emerald-100 text-emerald-900'
-                      }`}
-                    >
-                      {isTutor ? 'Преподаватель' : 'Ученик'}
-                    </span>
-                  </div>
-                  <span className="text-[10px] text-slate-500 font-mono leading-tight">
-                    @{currentUser.username}
+              {/* Name & Role */}
+              <div className="flex flex-col text-left">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-xs font-bold text-slate-900 max-w-[120px] sm:max-w-[160px] truncate">
+                    {currentUser.name}
+                  </span>
+                  <span
+                    className={`px-1.5 py-0.2 rounded-md text-[10px] font-semibold ${
+                      isTutor ? 'bg-amber-100 text-amber-900' : 'bg-emerald-100 text-emerald-900'
+                    }`}
+                  >
+                    {isTutor ? 'Преподаватель' : 'Ученик'}
                   </span>
                 </div>
-
-                {/* Tutors: Manage registered users */}
-                {isTutor && (
-                  <button
-                    type="button"
-                    onClick={() => setShowUsersModal(true)}
-                    title="Список всех зарегистрированных пользователей"
-                    className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-white rounded-xl transition cursor-pointer"
-                  >
-                    <Users className="w-4 h-4" />
-                  </button>
-                )}
-
-                {/* Logout / Switch Account */}
-                <button
-                  type="button"
-                  onClick={handleLogout}
-                  title="Выйти из аккаунта"
-                  className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer"
-                >
-                  <LogOut className="w-4 h-4" />
-                </button>
+                <span className="text-[10px] text-slate-500 font-mono leading-tight">
+                  @{currentUser.username}
+                </span>
               </div>
-            ) : (
-              <div className="flex items-center gap-2">
+
+              {/* Tutors: Manage registered users */}
+              {isTutor && (
                 <button
                   type="button"
-                  onClick={() => {
-                    setAuthMode('login');
-                    setAuthError(null);
-                    setActiveDialog('auth');
-                  }}
-                  className="px-3.5 py-2 text-xs font-bold text-slate-700 hover:text-slate-900 hover:bg-slate-100 border border-slate-200 rounded-xl transition cursor-pointer"
+                  onClick={() => setShowUsersModal(true)}
+                  title="Список всех зарегистрированных пользователей"
+                  className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-white rounded-xl transition cursor-pointer"
                 >
-                  Вход
+                  <Users className="w-4 h-4" />
                 </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthMode('register');
-                    setAuthError(null);
-                    setActiveDialog('auth');
-                  }}
-                  className="px-3.5 py-2 text-xs font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl shadow-sm transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Sparkles className="w-3.5 h-3.5" />
-                  <span>Регистрация</span>
-                </button>
-              </div>
-            )}
+              )}
+
+              {/* Logout / Switch Account */}
+              <button
+                type="button"
+                onClick={handleLogout}
+                title="Выйти из аккаунта"
+                className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-xl transition cursor-pointer"
+              >
+                <LogOut className="w-4 h-4" />
+              </button>
+            </div>
           </div>
         </div>
       </header>
@@ -845,12 +1194,12 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
           )}
         </section>
 
-        {/* SECTION 2: ДЕЙСТВИЯ (Action Cards: Войти по коду & Создать комнату) */}
+        {/* SECTION 2: ДЕЙСТВИЯ (Action Cards) */}
         <section className="flex flex-col gap-4">
           <h2 className="text-sm font-bold text-slate-900 tracking-tight">Быстрые действия</h2>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            {/* Action Card 1: Войти по коду */}
+          <div className={`grid gap-5 ${isTutor ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1 max-w-xl'}`}>
+            {/* Action Card 1: Войти по коду (Visible to both Student & Tutor) */}
             <div
               onClick={() => {
                 setAuthError(null);
@@ -877,42 +1226,34 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
               </span>
             </div>
 
-            {/* Action Card 2: Создать новую комнату (If tutor, or allow login as tutor) */}
-            <div
-              onClick={() => {
-                setAuthError(null);
-                if (!currentUser) {
-                  setAuthMode('login');
-                  setActiveDialog('auth');
-                } else if (isTutor) {
+            {/* Action Card 2: Создать новую комнату (STRICTLY TUTOR ONLY - NEVER SHOWN TO STUDENTS) */}
+            {isTutor && (
+              <div
+                onClick={() => {
+                  setAuthError(null);
                   setActiveDialog('create-room');
-                } else {
-                  setAuthError('Создание комнат доступно только в аккаунте преподавателя.');
-                  setActiveDialog('join-code');
-                }
-              }}
-              className="p-6 bg-white hover:bg-blue-50/30 border border-slate-200/90 hover:border-blue-300 rounded-3xl transition-all duration-200 shadow-2xs hover:shadow-md hover:shadow-blue-600/5 cursor-pointer group flex items-center justify-between gap-4"
-            >
-              <div className="flex items-center gap-4">
-                <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 text-blue-700 flex items-center justify-center group-hover:scale-105 transition">
-                  <Plus className="w-6 h-6" />
+                }}
+                className="p-6 bg-white hover:bg-blue-50/30 border border-slate-200/90 hover:border-blue-300 rounded-3xl transition-all duration-200 shadow-2xs hover:shadow-md hover:shadow-blue-600/5 cursor-pointer group flex items-center justify-between gap-4"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-blue-500/10 border border-blue-500/20 text-blue-700 flex items-center justify-center group-hover:scale-105 transition">
+                    <Plus className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 group-hover:text-blue-600 transition">
+                      Создать новую доску
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Запустить интерактивную доску для занятия с учениками
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900 group-hover:text-blue-600 transition">
-                    Создать новую доску
-                  </h3>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    {isTutor
-                      ? 'Запустить интерактивную доску для занятия с учениками'
-                      : 'Создание доступно для преподавателей'}
-                  </p>
-                </div>
+                <span className="px-3.5 py-2 bg-blue-600 text-white rounded-xl font-bold text-xs transition flex items-center gap-1.5 shrink-0 shadow-sm shadow-blue-600/20">
+                  <Sparkles className="w-3.5 h-3.5" />
+                  <span>Создать</span>
+                </span>
               </div>
-              <span className="px-3.5 py-2 bg-blue-600 text-white rounded-xl font-bold text-xs transition flex items-center gap-1.5 shrink-0 shadow-sm shadow-blue-600/20">
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Создать</span>
-              </span>
-            </div>
+            )}
           </div>
         </section>
       </main>
@@ -953,139 +1294,69 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                 </div>
               )}
 
-              {/* Form */}
-              {currentUser ? (
-                <form onSubmit={handleJoinByCodeSubmit} className="space-y-4">
-                  <div>
-                    <div className="flex items-center justify-between mb-1.5">
-                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                        Код комнаты или одноразовый ключ
-                      </label>
-                      <button
-                        type="button"
-                        onClick={() => handlePasteClipboard(setInviteKeyInput)}
-                        className="text-[11px] text-amber-600 hover:text-amber-700 font-semibold flex items-center gap-1 cursor-pointer"
-                      >
-                        <Clipboard className="w-3 h-3" />
-                        <span>Вставить</span>
-                      </button>
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      autoFocus
-                      value={inviteKeyInput}
-                      onChange={(e) => setInviteKeyInput(e.target.value.toUpperCase())}
-                      placeholder="INV-XXXX или ROOM-XXXX"
-                      className="w-full bg-amber-50/40 hover:bg-white focus:bg-white border border-amber-200 focus:border-amber-500 focus:ring-2 focus:ring-amber-100 rounded-2xl px-4 py-3 text-sm font-mono font-bold text-amber-800 placeholder-slate-400 outline-none uppercase tracking-widest text-center transition"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-1 text-center">
-                      После входа доска автоматически сохранится в списке ваших комнат
-                    </p>
-                  </div>
-
-                  {/* Marker Color Row */}
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-xs font-semibold text-slate-600">Цвет маркера:</span>
-                    <div className="flex items-center gap-1.5">
-                      {AVATAR_COLORS.map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          onClick={() => setUserColor(c)}
-                          className={`w-5 h-5 rounded-full transition transform hover:scale-110 flex items-center justify-center cursor-pointer ${
-                            userColor === c ? 'ring-2 ring-blue-600 ring-offset-2 scale-110' : 'opacity-70 hover:opacity-100'
-                          }`}
-                          style={{ backgroundColor: c }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full h-11 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 cursor-pointer mt-2"
-                  >
-                    <span>{authLoading ? 'Подключение...' : 'Присоединиться к уроку'}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </form>
-              ) : (
-                <form onSubmit={handleGuestEntry} className="space-y-3.5">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      Ваше имя
+              <form onSubmit={handleJoinByCodeSubmit} className="space-y-4">
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      Код комнаты или одноразовый ключ
                     </label>
-                    <input
-                      type="text"
-                      required
-                      value={guestName}
-                      onChange={(e) => setGuestName(e.target.value)}
-                      placeholder="Например: Андрей"
-                      className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 outline-none transition"
-                    />
+                    <button
+                      type="button"
+                      onClick={() => handlePasteClipboard(setInviteKeyInput)}
+                      className="text-[11px] text-amber-600 hover:text-amber-700 font-semibold flex items-center gap-1 cursor-pointer"
+                    >
+                      <Clipboard className="w-3 h-3" />
+                      <span>Вставить</span>
+                    </button>
                   </div>
+                  <input
+                    type="text"
+                    required
+                    autoFocus
+                    value={inviteKeyInput}
+                    onChange={(e) => setInviteKeyInput(e.target.value.toUpperCase())}
+                    placeholder="INV-XXXX или ROOM-XXXX"
+                    className="w-full bg-amber-50/40 hover:bg-white focus:bg-white border border-amber-200 focus:border-amber-500 focus:ring-2 focus:ring-amber-100 rounded-2xl px-4 py-3 text-sm font-mono font-bold text-amber-800 placeholder-slate-400 outline-none uppercase tracking-widest text-center transition"
+                  />
+                  <p className="text-[10px] text-slate-400 mt-1 text-center">
+                    После входа доска автоматически сохранится в списке ваших комнат
+                  </p>
+                </div>
 
-                  <div>
-                    <div className="flex items-center justify-between mb-1">
-                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                        Код или одноразовый ключ:
-                      </label>
+                {/* Marker Color Row */}
+                <div className="flex items-center justify-between pt-1">
+                  <span className="text-xs font-semibold text-slate-600">Цвет маркера:</span>
+                  <div className="flex items-center gap-1.5">
+                    {AVATAR_COLORS.map((c) => (
                       <button
+                        key={c}
                         type="button"
-                        onClick={() => handlePasteClipboard(setGuestInviteCode)}
-                        className="text-[11px] text-amber-600 hover:text-amber-700 font-semibold flex items-center gap-1 cursor-pointer"
-                      >
-                        <Clipboard className="w-3 h-3" />
-                        <span>Вставить</span>
-                      </button>
-                    </div>
-                    <input
-                      type="text"
-                      required
-                      value={guestInviteCode}
-                      onChange={(e) => setGuestInviteCode(e.target.value.toUpperCase())}
-                      placeholder="INV-XXXX или ROOM-XXXX"
-                      className="w-full bg-amber-50/50 hover:bg-white focus:bg-white border border-amber-200 focus:border-amber-500 focus:ring-2 focus:ring-amber-100 rounded-xl px-3.5 py-2.5 text-xs font-mono font-bold text-amber-800 placeholder-slate-400 outline-none uppercase tracking-wider text-center transition"
-                    />
+                        onClick={() => setUserColor(c)}
+                        className={`w-5 h-5 rounded-full transition transform hover:scale-110 flex items-center justify-center cursor-pointer ${
+                          userColor === c ? 'ring-2 ring-blue-600 ring-offset-2 scale-110' : 'opacity-70 hover:opacity-100'
+                        }`}
+                        style={{ backgroundColor: c }}
+                      />
+                    ))}
                   </div>
+                </div>
 
-                  {/* Marker Color Row */}
-                  <div className="flex items-center justify-between pt-1">
-                    <span className="text-xs font-semibold text-slate-600">Цвет маркера:</span>
-                    <div className="flex items-center gap-1.5">
-                      {AVATAR_COLORS.map((c) => (
-                        <button
-                          key={c}
-                          type="button"
-                          onClick={() => setUserColor(c)}
-                          className={`w-5 h-5 rounded-full transition transform hover:scale-110 flex items-center justify-center cursor-pointer ${
-                            userColor === c ? 'ring-2 ring-blue-600 ring-offset-2 scale-110' : 'opacity-70 hover:opacity-100'
-                          }`}
-                          style={{ backgroundColor: c }}
-                        />
-                      ))}
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full h-11 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 cursor-pointer mt-2"
-                  >
-                    <span>{authLoading ? 'Подключение...' : 'Войти на доску'}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </form>
-              )}
+                <button
+                  type="submit"
+                  disabled={authLoading}
+                  className="w-full h-11 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 cursor-pointer mt-2"
+                >
+                  <span>{authLoading ? 'Подключение...' : 'Присоединиться к уроку'}</span>
+                  <ArrowRight className="w-4 h-4" />
+                </button>
+              </form>
             </div>
           </div>
         </div>
       )}
 
-      {/* ===================== MODAL 2: СОЗДАТЬ НОВУЮ КОМНАТУ ===================== */}
-      {activeDialog === 'create-room' && (
+      {/* ===================== MODAL 2: СОЗДАТЬ НОВУЮ КОМНАТУ (TUTOR ONLY) ===================== */}
+      {activeDialog === 'create-room' && isTutor && (
         <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
           <div className="w-full max-w-[480px] bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
             {/* Modal Header */}
@@ -1146,7 +1417,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                   required
                   value={lessonTitle}
                   onChange={(e) => setLessonTitle(e.target.value)}
-                  placeholder="Например: Подготовка к ЕГЭ по математике"
+                  placeholder="Например: Подготовка к экзамену"
                   className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 outline-none transition"
                 />
               </div>
@@ -1195,288 +1466,13 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
         </div>
       )}
 
-      {/* ===================== MODAL 3: АВТОРИЗАЦИЯ / РЕГИСТРАЦИЯ ===================== */}
-      {activeDialog === 'auth' && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
-          <div className="w-full max-w-[440px] bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
-            {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center">
-                  <GraduationCap className="w-4 h-4" />
-                </div>
-                <div>
-                  <h3 className="text-sm font-bold text-slate-900">
-                    {authMode === 'login' ? 'Вход в аккаунт' : 'Регистрация'}
-                  </h3>
-                  <p className="text-[11px] text-slate-500">TutorBoard</p>
-                </div>
-              </div>
-              <button
-                type="button"
-                onClick={() => {
-                  setActiveDialog(null);
-                  setAuthError(null);
-                }}
-                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition cursor-pointer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Modal Body */}
-            <div className="p-6">
-              {authError && (
-                <div className="mb-4 p-3 bg-rose-50 border border-rose-200 text-rose-800 rounded-2xl text-xs flex items-center gap-2">
-                  <AlertCircle className="w-4 h-4 shrink-0 text-rose-600" />
-                  <span className="font-medium">{authError}</span>
-                </div>
-              )}
-
-              {/* Segmented Auth Mode Switcher */}
-              <div className="grid grid-cols-2 gap-1 bg-slate-100/90 p-1 rounded-2xl border border-slate-200/70 mb-5">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthMode('login');
-                    setAuthError(null);
-                  }}
-                  className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                    authMode === 'login'
-                      ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <KeyRound className="w-3.5 h-3.5" />
-                  <span>Вход</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setAuthMode('register');
-                    setAuthError(null);
-                  }}
-                  className={`py-2 px-2.5 rounded-xl text-xs font-semibold transition flex items-center justify-center gap-1.5 cursor-pointer ${
-                    authMode === 'register'
-                      ? 'bg-white text-slate-900 shadow-sm border border-slate-200/60 font-bold'
-                      : 'text-slate-500 hover:text-slate-800'
-                  }`}
-                >
-                  <Sparkles className="w-3.5 h-3.5 text-blue-600" />
-                  <span>Регистрация</span>
-                </button>
-              </div>
-
-              {/* LOGIN FORM */}
-              {authMode === 'login' && (
-                <form onSubmit={handleLogin} className="space-y-3.5">
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      Логин
-                    </label>
-                    <div className="relative">
-                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                      <input
-                        type="text"
-                        required
-                        value={loginUsername}
-                        onChange={(e) => setLoginUsername(e.target.value)}
-                        placeholder="Введите ваш логин"
-                        className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl pl-10 pr-3.5 py-2.5 text-xs text-slate-900 placeholder-slate-400 transition outline-none"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      Пароль
-                    </label>
-                    <div className="relative">
-                      <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
-                      <input
-                        type={showLoginPassword ? 'text' : 'password'}
-                        required
-                        value={loginPassword}
-                        onChange={(e) => setLoginPassword(e.target.value)}
-                        placeholder="Ваш пароль"
-                        className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl pl-10 pr-10 py-2.5 text-xs text-slate-900 placeholder-slate-400 transition outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setShowLoginPassword(!showLoginPassword)}
-                        className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-                      >
-                        {showLoginPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
-                      </button>
-                    </div>
-                  </div>
-
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full h-11 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 mt-2 cursor-pointer"
-                  >
-                    <span>{authLoading ? 'Вход...' : 'Войти в аккаунт'}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </form>
-              )}
-
-              {/* REGISTER FORM */}
-              {authMode === 'register' && (
-                <form onSubmit={handleRegister} className="space-y-3">
-                  <div className="flex items-center gap-3 p-2.5 bg-slate-50/80 border border-slate-200 rounded-2xl">
-                    <button
-                      type="button"
-                      onClick={() => setShowAvatarModal(true)}
-                      className="relative group shrink-0 cursor-pointer"
-                      title="Выбрать аватарку"
-                    >
-                      <UserAvatar
-                        avatar={regAvatar}
-                        name={regName || 'Пользователь'}
-                        color={userColor}
-                        size="md"
-                        className="ring-2 ring-blue-500/30 group-hover:scale-105 transition"
-                      />
-                      <span className="absolute -bottom-1 -right-1 w-4 h-4 rounded-full bg-blue-600 text-white flex items-center justify-center text-[9px] shadow-sm">
-                        ✎
-                      </span>
-                    </button>
-
-                    <div className="flex-1 min-w-0">
-                      <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-0.5">
-                        Ваше Имя
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={regName}
-                        onChange={(e) => setRegName(e.target.value)}
-                        placeholder="Например: Иван Иванов"
-                        className="w-full bg-transparent border-0 text-xs font-semibold text-slate-900 placeholder-slate-400 focus:outline-none p-0"
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Логин
-                      </label>
-                      <input
-                        type="text"
-                        required
-                        value={regUsername}
-                        onChange={(e) => setRegUsername(e.target.value)}
-                        placeholder="ivan123"
-                        className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                        Пароль
-                      </label>
-                      <div className="relative">
-                        <input
-                          type={showRegPassword ? 'text' : 'password'}
-                          required
-                          value={regPassword}
-                          onChange={(e) => setRegPassword(e.target.value)}
-                          placeholder="Пароль"
-                          className="w-full bg-slate-50/80 hover:bg-white focus:bg-white border border-slate-200 focus:border-blue-500 focus:ring-2 focus:ring-blue-100 rounded-xl px-3 py-2 text-xs text-slate-900 placeholder-slate-400 outline-none pr-7"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setShowRegPassword(!showRegPassword)}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
-                        >
-                          {showRegPassword ? <EyeOff className="w-3.5 h-3.5" /> : <Eye className="w-3.5 h-3.5" />}
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Role Segment */}
-                  <div>
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider mb-1">
-                      Ваша роль
-                    </label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setRegRole('student')}
-                        className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 cursor-pointer ${
-                          regRole === 'student'
-                            ? 'bg-blue-50/70 border-blue-500 text-slate-900 ring-1 ring-blue-500/20'
-                            : 'bg-slate-50/70 hover:bg-slate-100/70 border-slate-200 text-slate-600'
-                        }`}
-                      >
-                        <span className="text-lg">🎓</span>
-                        <div>
-                          <div className="text-xs font-bold text-slate-900">Ученик</div>
-                          <div className="text-[10px] text-slate-500">Подключение к урокам</div>
-                        </div>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => setRegRole('tutor')}
-                        className={`p-2.5 rounded-xl border text-left transition flex items-center gap-2.5 cursor-pointer ${
-                          regRole === 'tutor'
-                            ? 'bg-blue-50/70 border-blue-500 text-slate-900 ring-1 ring-blue-500/20'
-                            : 'bg-slate-50/70 hover:bg-slate-100/70 border-slate-200 text-slate-600'
-                        }`}
-                      >
-                        <span className="text-lg">👨‍🏫</span>
-                        <div>
-                          <div className="text-xs font-bold text-slate-900">Преподаватель</div>
-                          <div className="text-[10px] text-slate-500">Создание комнат</div>
-                        </div>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Tutor Key Input (If tutor role) */}
-                  {regRole === 'tutor' && (
-                    <div className="p-3 bg-amber-50/80 border border-amber-200/90 rounded-2xl space-y-1.5 animate-in fade-in duration-150">
-                      <label className="text-[11px] font-bold text-amber-900 flex items-center gap-1.5">
-                        <ShieldCheck className="w-3.5 h-3.5 text-amber-600" />
-                        <span>Секретный ключ преподавателя:</span>
-                      </label>
-                      <input
-                        type="password"
-                        value={regTutorCode}
-                        onChange={(e) => setRegTutorCode(e.target.value)}
-                        placeholder="Введите секретный ключ"
-                        className="w-full bg-white border border-amber-300 rounded-xl px-3 py-2 text-xs font-mono text-amber-950 focus:outline-none focus:border-amber-500"
-                      />
-                    </div>
-                  )}
-
-                  <button
-                    type="submit"
-                    disabled={authLoading}
-                    className="w-full h-11 bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white font-bold text-xs rounded-xl shadow-md shadow-blue-600/20 transition flex items-center justify-center gap-2 mt-2 cursor-pointer"
-                  >
-                    <span>{authLoading ? 'Создание...' : 'Зарегистрироваться'}</span>
-                    <ArrowRight className="w-4 h-4" />
-                  </button>
-                </form>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
-
       {/* Avatar Picker Modal */}
       <AvatarPicker
         isOpen={showAvatarModal}
         onClose={() => setShowAvatarModal(false)}
-        selectedAvatar={currentUser?.avatar || regAvatar}
+        selectedAvatar={currentUser.avatar || regAvatar}
         selectedColor={userColor}
-        userName={currentUser?.name || regName || 'Пользователь'}
+        userName={currentUser.name}
         onSelectAvatar={(av, col) => {
           setRegAvatar(av);
           if (col) setUserColor(col);
