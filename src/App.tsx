@@ -15,7 +15,7 @@ import {
   WhiteboardAction,
 } from './types';
 import { KeybindSettings, DEFAULT_KEYBINDS } from './types/extra';
-import { getSocket, disconnectSocket } from './services/socket';
+import { getSocket, disconnectSocket, forceReconnectSocket } from './services/socket';
 import { voiceManager } from './services/webrtc';
 import { Canvas } from './components/Whiteboard/Canvas';
 import { Toolbar } from './components/Whiteboard/Toolbar';
@@ -29,6 +29,7 @@ import { SettingsModal } from './components/Room/SettingsModal';
 import { CodeIDE } from './components/IDE/CodeIDE';
 import { AvatarPicker } from './components/Common/AvatarPicker';
 import confetti from 'canvas-confetti';
+import { WifiOff, RefreshCw, Radio } from 'lucide-react';
 
 const KEYBINDS_STORAGE_KEY = 'tutorboard_keybinds';
 const STORAGE_KEY = 'tutorboard_user_session';
@@ -46,6 +47,8 @@ export default function App() {
   const [userAvatar, setUserAvatar] = useState('🎓');
   const [myUserId, setMyUserId] = useState('');
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
+  const [isOffline, setIsOffline] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
 
   // Mode View (Whiteboard vs Collaborative IDE)
   const [activeView, setActiveView] = useState<'board' | 'ide'>('board');
@@ -615,6 +618,79 @@ export default function App() {
         setUnreadChatCount((prev) => prev + 1);
       }
     });
+
+    // Connection lifecycle & Resync
+    socket.on('disconnect', (reason) => {
+      console.warn('[Socket] Disconnected from server:', reason);
+      setIsReconnecting(true);
+    });
+
+    socket.on('connect', () => {
+      console.log('[Socket] Connected / Reconnected. Resyncing room state...');
+      setIsReconnecting(false);
+      // Resend room:join and board:request_sync
+      socket.emit('room:join', joinPayload);
+      socket.emit('board:request_sync', { roomId: targetRoomId });
+      // Reset voice WebRTC peers so audio reconnects cleanly
+      voiceManager.resetPeers();
+    });
+
+    socket.on('reconnect', (attemptNumber) => {
+      console.log('[Socket] Reconnect success after attempts:', attemptNumber);
+      setIsReconnecting(false);
+      socket.emit('room:join', joinPayload);
+      socket.emit('board:request_sync', { roomId: targetRoomId });
+      voiceManager.resetPeers();
+      showToast('✅ Соединение с доской восстановлено');
+    });
+  };
+
+  // Online / Offline Window Listeners
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOffline(false);
+      setIsReconnecting(false);
+      showToast('🌐 Интернет-соединение появилось');
+      const socket = forceReconnectSocket();
+      if (isInRoom && roomId) {
+        socket.emit('board:request_sync', { roomId });
+        voiceManager.resetPeers();
+      }
+    };
+
+    const handleOffline = () => {
+      setIsOffline(true);
+      setIsReconnecting(true);
+      showToast('📡 Интернет отключен. Ожидание сети...');
+    };
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, [isInRoom, roomId]);
+
+  const handleManualReconnect = () => {
+    setIsReconnecting(true);
+    const socket = forceReconnectSocket();
+    if (isInRoom && roomId) {
+      const stored = localStorage.getItem(ACTIVE_ROOM_KEY);
+      if (stored) {
+        try {
+          const parsed = JSON.parse(stored);
+          socket.emit('room:join', parsed);
+        } catch {}
+      }
+      socket.emit('board:request_sync', { roomId });
+      voiceManager.resetPeers();
+    }
+    setTimeout(() => {
+      setIsReconnecting(false);
+      showToast('🔄 Запрос на синхронизацию отправлен');
+    }, 1200);
   };
 
   // Keyboard Shortcuts Handler
@@ -867,6 +943,28 @@ export default function App() {
         onSelectView={(view) => setActiveView(view)}
         onOpenAvatarPicker={() => setShowAvatarPicker(true)}
       />
+
+      {/* Connection Drop & Reconnection Status Indicator Banner */}
+      {(isReconnecting || isOffline) && (
+        <div className="bg-amber-500 text-slate-950 px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md z-50 animate-pulse border-b border-amber-600">
+          <div className="flex items-center gap-2">
+            <WifiOff className="w-4 h-4 text-slate-950" />
+            <span>
+              {isOffline
+                ? 'Отсутствует подключение к интернету. Доска перейдет в рабочий режим сразу при появлении сети.'
+                : 'Связь с сервером прервалась. Выполняется автоматическое переподключение и восстановление данных...'}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={handleManualReconnect}
+            className="flex items-center gap-1 px-3 py-1 bg-slate-900 text-white hover:bg-black rounded-lg text-xs font-semibold shadow-xs cursor-pointer transition"
+          >
+            <RefreshCw className={`w-3 h-3 ${isReconnecting ? 'animate-spin' : ''}`} />
+            <span>Восстановить сейчас</span>
+          </button>
+        </div>
+      )}
 
       {/* Main Workspace Area (Whiteboard OR Collaborative IDE) */}
       <div className="flex-1 relative flex overflow-hidden">

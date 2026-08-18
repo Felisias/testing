@@ -2,6 +2,21 @@ import { getSocket } from './socket';
 
 const STORAGE_MIC_KEY = 'webrtc_selected_mic';
 const STORAGE_SPEAKER_KEY = 'webrtc_selected_speaker';
+const STORAGE_NOISE_SUPPRESSION_KEY = 'webrtc_noise_suppression_enabled';
+const STORAGE_NOISE_MODE_KEY = 'webrtc_noise_suppression_mode';
+const STORAGE_NOISE_GATE_KEY = 'webrtc_noise_gate_threshold';
+const STORAGE_ECHO_CANCEL_KEY = 'webrtc_echo_cancellation';
+const STORAGE_AUTO_GAIN_KEY = 'webrtc_auto_gain';
+
+export type NoiseSuppressionMode = 'smart' | 'standard' | 'off';
+
+export interface AudioSettings {
+  noiseSuppressionEnabled: boolean;
+  noiseSuppressionMode: NoiseSuppressionMode;
+  noiseGateThreshold: number; // 0 - 100
+  echoCancellation: boolean;
+  autoGainControl: boolean;
+}
 
 interface PeerConnectionState {
   peerId: string;
@@ -21,6 +36,7 @@ export interface AudioDeviceInfo {
 
 export class VoiceManager {
   private localStream: MediaStream | null = null;
+  private rawLocalStream: MediaStream | null = null;
   private audioContext: AudioContext | null = null;
   private localAnalyser: AnalyserNode | null = null;
   private peerConnections: Map<string, PeerConnectionState> = new Map();
@@ -30,12 +46,26 @@ export class VoiceManager {
   private onVolumeChangeCallback: ((volume: number) => void) | null = null;
   private onSpeakingChangeCallback: ((isSpeaking: boolean) => void) | null = null;
   private isSpeaking: boolean = false;
-  private speakingThreshold: number = 15; // 0-100 scale
   private audioContainer: HTMLElement | null = null;
+
+  // Audio DSP Noise Suppression Nodes
+  private sourceNode: MediaStreamAudioSourceNode | null = null;
+  private highpassFilterNode: BiquadFilterNode | null = null;
+  private lowpassFilterNode: BiquadFilterNode | null = null;
+  private gateGainNode: GainNode | null = null;
+  private mediaStreamDestinationNode: MediaStreamAudioDestinationNode | null = null;
+  private currentGateGain: number = 1.0;
 
   // Selected Device IDs
   private selectedInputDeviceId: string = 'default';
   private selectedOutputDeviceId: string = 'default';
+
+  // Noise Suppression and Audio Enhancements Config
+  private noiseSuppressionEnabled: boolean = true;
+  private noiseSuppressionMode: NoiseSuppressionMode = 'smart';
+  private noiseGateThreshold: number = 15; // 0-100 scale
+  private echoCancellation: boolean = true;
+  private autoGainControl: boolean = true;
 
   // Reliable free STUN servers for robust NAT traversal across different PCs and networks
   private rtcConfig: RTCConfiguration = {
@@ -58,6 +88,26 @@ export class VoiceManager {
       if (savedMic) this.selectedInputDeviceId = savedMic;
       const savedSpeaker = localStorage.getItem(STORAGE_SPEAKER_KEY);
       if (savedSpeaker) this.selectedOutputDeviceId = savedSpeaker;
+
+      const savedNoiseSupp = localStorage.getItem(STORAGE_NOISE_SUPPRESSION_KEY);
+      if (savedNoiseSupp !== null) this.noiseSuppressionEnabled = savedNoiseSupp === 'true';
+
+      const savedMode = localStorage.getItem(STORAGE_NOISE_MODE_KEY) as NoiseSuppressionMode;
+      if (savedMode && ['smart', 'standard', 'off'].includes(savedMode)) {
+        this.noiseSuppressionMode = savedMode;
+      }
+
+      const savedGate = localStorage.getItem(STORAGE_NOISE_GATE_KEY);
+      if (savedGate) {
+        const parsed = parseInt(savedGate, 10);
+        if (!isNaN(parsed) && parsed >= 0 && parsed <= 100) this.noiseGateThreshold = parsed;
+      }
+
+      const savedEcho = localStorage.getItem(STORAGE_ECHO_CANCEL_KEY);
+      if (savedEcho !== null) this.echoCancellation = savedEcho === 'true';
+
+      const savedGain = localStorage.getItem(STORAGE_AUTO_GAIN_KEY);
+      if (savedGain !== null) this.autoGainControl = savedGain === 'true';
     } catch {}
 
     this.setupSocketListeners();
@@ -287,6 +337,132 @@ export class VoiceManager {
     };
   }
 
+  private setupAudioProcessingPipeline(rawStream: MediaStream): MediaStream {
+    try {
+      const ctx = this.getAudioContext();
+
+      // Disconnect previous audio nodes if any
+      if (this.sourceNode) {
+        try {
+          this.sourceNode.disconnect();
+        } catch {}
+      }
+
+      this.sourceNode = ctx.createMediaStreamSource(rawStream);
+
+      // 1. Highpass filter (~85Hz) removes low-frequency table bumps, AC hum, computer fan vibrations
+      this.highpassFilterNode = ctx.createBiquadFilter();
+      this.highpassFilterNode.type = 'highpass';
+      this.highpassFilterNode.frequency.setValueAtTime(85, ctx.currentTime);
+      this.highpassFilterNode.Q.setValueAtTime(0.7, ctx.currentTime);
+
+      // 2. Lowpass filter (~7500Hz) removes high-frequency hiss, coil whine, electronic buzz
+      this.lowpassFilterNode = ctx.createBiquadFilter();
+      this.lowpassFilterNode.type = 'lowpass';
+      this.lowpassFilterNode.frequency.setValueAtTime(7500, ctx.currentTime);
+      this.lowpassFilterNode.Q.setValueAtTime(0.7, ctx.currentTime);
+
+      // 3. Noise Gate Gain Node (attenuates background room noise, key clicks when quiet)
+      this.gateGainNode = ctx.createGain();
+      this.gateGainNode.gain.setValueAtTime(1.0, ctx.currentTime);
+      this.currentGateGain = 1.0;
+
+      // 4. Destination node generates a processed MediaStream to send over WebRTC
+      this.mediaStreamDestinationNode = ctx.createMediaStreamDestination();
+
+      // 5. Analyser node for volume monitoring (measures signal before gate attenuation)
+      this.localAnalyser = ctx.createAnalyser();
+      this.localAnalyser.fftSize = 256;
+      this.localAnalyser.smoothingTimeConstant = 0.3;
+
+      // Connect DSP graph: Source -> Highpass -> Lowpass -> GateGain -> MediaStreamDestination
+      this.sourceNode.connect(this.highpassFilterNode);
+      this.highpassFilterNode.connect(this.lowpassFilterNode);
+      this.lowpassFilterNode.connect(this.gateGainNode);
+      this.gateGainNode.connect(this.mediaStreamDestinationNode);
+
+      // Connect filtered signal to Analyser (to evaluate voice volume cleanly)
+      this.lowpassFilterNode.connect(this.localAnalyser);
+
+      if (!this.animationFrameId) {
+        this.startVolumeMonitoring();
+      }
+
+      // Return processed stream if smart noise filter is active
+      if (this.noiseSuppressionEnabled && this.noiseSuppressionMode === 'smart') {
+        return this.mediaStreamDestinationNode.stream;
+      }
+
+      return rawStream;
+    } catch (e) {
+      console.warn('AudioContext DSP processing fallback:', e);
+      return rawStream;
+    }
+  }
+
+  public hasLocalStream(): boolean {
+    return !!(this.localStream && this.localStream.active && this.localStream.getAudioTracks().length > 0);
+  }
+
+  public async initLocalAudio(inputDeviceId?: string): Promise<boolean> {
+    try {
+      if (this.hasLocalStream() && !inputDeviceId) {
+        return true;
+      }
+
+      const devId = inputDeviceId || this.selectedInputDeviceId;
+      const constraints: MediaStreamConstraints = {
+        audio: {
+          deviceId: devId === 'default' ? undefined : { exact: devId },
+          echoCancellation: this.echoCancellation,
+          noiseSuppression: this.noiseSuppressionEnabled && this.noiseSuppressionMode !== 'off',
+          autoGainControl: this.autoGainControl,
+        },
+        video: false,
+      };
+
+      const rawStream = await navigator.mediaDevices.getUserMedia(constraints);
+      this.rawLocalStream = rawStream;
+
+      const finalStream = this.setupAudioProcessingPipeline(rawStream);
+      this.localStream = finalStream;
+
+      const audioTrack = finalStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !this.isMuted;
+      }
+
+      // Attach tracks to all existing peer connections
+      for (const [peerId, peer] of this.peerConnections.entries()) {
+        if (audioTrack) {
+          const senders = peer.connection.getSenders();
+          const audioSender = senders.find((s) => s.track?.kind === 'audio' || !s.track);
+          if (audioSender) {
+            try {
+              await audioSender.replaceTrack(audioTrack);
+            } catch (e) {
+              peer.connection.addTrack(audioTrack, finalStream);
+            }
+          } else {
+            try {
+              peer.connection.addTrack(audioTrack, finalStream);
+            } catch (e) {}
+          }
+        }
+
+        // If connection is stable, trigger renegotiation
+        if (peer.connection.signalingState === 'stable') {
+          this.callPeer(peerId);
+        }
+      }
+
+      return true;
+    } catch (err) {
+      console.warn('Microphone access not granted or unavailable:', err);
+      return false;
+    }
+  }
+
   public async setAudioInputDevice(deviceId: string): Promise<boolean> {
     this.selectedInputDeviceId = deviceId;
     try {
@@ -297,15 +473,21 @@ export class VoiceManager {
       const constraints: MediaStreamConstraints = {
         audio: {
           deviceId: deviceId === 'default' ? undefined : { exact: deviceId },
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
+          echoCancellation: this.echoCancellation,
+          noiseSuppression: this.noiseSuppressionEnabled && this.noiseSuppressionMode !== 'off',
+          autoGainControl: this.autoGainControl,
         },
         video: false,
       };
 
-      const newStream = await navigator.mediaDevices.getUserMedia(constraints);
-      const newAudioTrack = newStream.getAudioTracks()[0];
+      const rawStream = await navigator.mediaDevices.getUserMedia(constraints);
+      if (this.rawLocalStream) {
+        this.rawLocalStream.getAudioTracks().forEach((t) => t.stop());
+      }
+      this.rawLocalStream = rawStream;
+
+      const finalStream = this.setupAudioProcessingPipeline(rawStream);
+      const newAudioTrack = finalStream.getAudioTracks()[0];
 
       if (!newAudioTrack) return false;
 
@@ -317,22 +499,19 @@ export class VoiceManager {
           try {
             await audioSender.replaceTrack(newAudioTrack);
           } catch (e) {
-            peer.connection.addTrack(newAudioTrack, newStream);
+            peer.connection.addTrack(newAudioTrack, finalStream);
           }
         } else {
-          peer.connection.addTrack(newAudioTrack, newStream);
+          peer.connection.addTrack(newAudioTrack, finalStream);
         }
       });
 
-      // Stop old tracks
-      if (this.localStream) {
+      // Stop old tracks if different
+      if (this.localStream && this.localStream !== finalStream) {
         this.localStream.getAudioTracks().forEach((t) => t.stop());
       }
-      this.localStream = newStream;
+      this.localStream = finalStream;
       newAudioTrack.enabled = !this.isMuted;
-
-      // Reconnect analyser
-      this.attachAnalyserToStream(newStream);
 
       return true;
     } catch (err) {
@@ -361,85 +540,6 @@ export class VoiceManager {
     }
 
     return success;
-  }
-
-  private attachAnalyserToStream(stream: MediaStream) {
-    try {
-      const ctx = this.getAudioContext();
-      const source = ctx.createMediaStreamSource(stream);
-      this.localAnalyser = ctx.createAnalyser();
-      this.localAnalyser.fftSize = 256;
-      this.localAnalyser.smoothingTimeConstant = 0.4;
-      // Connect to analyser only (NOT to ctx.destination, preventing local speaker loopback)
-      source.connect(this.localAnalyser);
-
-      if (!this.animationFrameId) {
-        this.startVolumeMonitoring();
-      }
-    } catch (e) {
-      console.warn('AudioContext visualization setup warning:', e);
-    }
-  }
-
-  public hasLocalStream(): boolean {
-    return !!(this.localStream && this.localStream.active && this.localStream.getAudioTracks().length > 0);
-  }
-
-  public async initLocalAudio(inputDeviceId?: string): Promise<boolean> {
-    try {
-      if (this.hasLocalStream() && !inputDeviceId) {
-        return true;
-      }
-
-      const devId = inputDeviceId || this.selectedInputDeviceId;
-      const constraints: MediaStreamConstraints = {
-        audio: {
-          deviceId: devId === 'default' ? undefined : { exact: devId },
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-        video: false,
-      };
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      this.localStream = stream;
-      const audioTrack = stream.getAudioTracks()[0];
-      if (audioTrack) {
-        audioTrack.enabled = !this.isMuted;
-      }
-
-      this.attachAnalyserToStream(stream);
-
-      // Attach tracks to all existing peer connections
-      for (const [peerId, peer] of this.peerConnections.entries()) {
-        if (audioTrack) {
-          const senders = peer.connection.getSenders();
-          const audioSender = senders.find((s) => s.track?.kind === 'audio' || !s.track);
-          if (audioSender) {
-            try {
-              await audioSender.replaceTrack(audioTrack);
-            } catch (e) {
-              peer.connection.addTrack(audioTrack, stream);
-            }
-          } else {
-            try {
-              peer.connection.addTrack(audioTrack, stream);
-            } catch (e) {}
-          }
-        }
-
-        // If connection is stable, trigger renegotiation
-        if (peer.connection.signalingState === 'stable') {
-          this.callPeer(peerId);
-        }
-      }
-
-      return true;
-    } catch (err) {
-      console.warn('Microphone access not granted or unavailable:', err);
-      return false;
-    }
   }
 
   public async callPeer(peerId: string) {
@@ -615,6 +715,14 @@ export class VoiceManager {
 
     const checkVolume = () => {
       if (!this.localAnalyser || this.isMuted) {
+        // When muted, ensure gate is closed
+        if (this.gateGainNode && this.audioContext) {
+          try {
+            this.gateGainNode.gain.cancelScheduledValues(this.audioContext.currentTime);
+            this.gateGainNode.gain.setValueAtTime(0.0, this.audioContext.currentTime);
+            this.currentGateGain = 0.0;
+          } catch {}
+        }
         if (this.isSpeaking) {
           this.isSpeaking = false;
           this.onSpeakingChangeCallback?.(false);
@@ -634,7 +742,39 @@ export class VoiceManager {
 
       this.onVolumeChangeCallback?.(normalizedVol);
 
-      const speakingNow = normalizedVol > this.speakingThreshold;
+      const speakingNow = normalizedVol >= this.noiseGateThreshold;
+
+      // Intelligent DSP Noise Gate dynamic attenuation
+      if (this.gateGainNode && this.audioContext) {
+        try {
+          const now = this.audioContext.currentTime;
+          if (this.noiseSuppressionEnabled && this.noiseSuppressionMode === 'smart') {
+            if (speakingNow) {
+              // Quick smooth attack when voice starts speaking (15ms)
+              if (this.currentGateGain < 0.95) {
+                this.gateGainNode.gain.cancelScheduledValues(now);
+                this.gateGainNode.gain.setTargetAtTime(1.0, now, 0.015);
+                this.currentGateGain = 1.0;
+              }
+            } else {
+              // Smooth exponential release to eliminate keyboard/ambient noise (120ms)
+              if (this.currentGateGain > 0.05) {
+                this.gateGainNode.gain.cancelScheduledValues(now);
+                this.gateGainNode.gain.setTargetAtTime(0.02, now, 0.12);
+                this.currentGateGain = 0.02;
+              }
+            }
+          } else {
+            // Full passthrough if smart mode is disabled
+            if (this.currentGateGain < 0.99) {
+              this.gateGainNode.gain.cancelScheduledValues(now);
+              this.gateGainNode.gain.setValueAtTime(1.0, now);
+              this.currentGateGain = 1.0;
+            }
+          }
+        } catch {}
+      }
+
       if (speakingNow !== this.isSpeaking) {
         this.isSpeaking = speakingNow;
         this.onSpeakingChangeCallback?.(speakingNow);
@@ -645,6 +785,95 @@ export class VoiceManager {
     };
 
     checkVolume();
+  }
+
+  public getAudioSettings(): AudioSettings {
+    return {
+      noiseSuppressionEnabled: this.noiseSuppressionEnabled,
+      noiseSuppressionMode: this.noiseSuppressionMode,
+      noiseGateThreshold: this.noiseGateThreshold,
+      echoCancellation: this.echoCancellation,
+      autoGainControl: this.autoGainControl,
+    };
+  }
+
+  public async setNoiseSuppressionEnabled(enabled: boolean): Promise<void> {
+    this.noiseSuppressionEnabled = enabled;
+    try {
+      localStorage.setItem(STORAGE_NOISE_SUPPRESSION_KEY, String(enabled));
+    } catch {}
+    await this.reapplyAudioConfig();
+  }
+
+  public async setNoiseSuppressionMode(mode: NoiseSuppressionMode): Promise<void> {
+    this.noiseSuppressionMode = mode;
+    try {
+      localStorage.setItem(STORAGE_NOISE_MODE_KEY, mode);
+    } catch {}
+    await this.reapplyAudioConfig();
+  }
+
+  public setNoiseGateThreshold(threshold: number): void {
+    const clamped = Math.max(0, Math.min(100, threshold));
+    this.noiseGateThreshold = clamped;
+    try {
+      localStorage.setItem(STORAGE_NOISE_GATE_KEY, String(clamped));
+    } catch {}
+  }
+
+  public async setEchoCancellation(enabled: boolean): Promise<void> {
+    this.echoCancellation = enabled;
+    try {
+      localStorage.setItem(STORAGE_ECHO_CANCEL_KEY, String(enabled));
+    } catch {}
+    await this.reapplyAudioConfig();
+  }
+
+  public async setAutoGainControl(enabled: boolean): Promise<void> {
+    this.autoGainControl = enabled;
+    try {
+      localStorage.setItem(STORAGE_AUTO_GAIN_KEY, String(enabled));
+    } catch {}
+    await this.reapplyAudioConfig();
+  }
+
+  private async reapplyAudioConfig(): Promise<void> {
+    if (!this.hasLocalStream() || !this.rawLocalStream) return;
+
+    try {
+      // Re-apply browser hardware constraints to the raw audio track
+      const rawTrack = this.rawLocalStream.getAudioTracks()[0];
+      if (rawTrack && typeof rawTrack.applyConstraints === 'function') {
+        await rawTrack.applyConstraints({
+          echoCancellation: this.echoCancellation,
+          noiseSuppression: this.noiseSuppressionEnabled && this.noiseSuppressionMode !== 'off',
+          autoGainControl: this.autoGainControl,
+        }).catch(() => {});
+      }
+
+      // Determine which stream should be sent to peers
+      let finalStream: MediaStream = this.rawLocalStream;
+      if (this.noiseSuppressionEnabled && this.noiseSuppressionMode === 'smart' && this.mediaStreamDestinationNode) {
+        finalStream = this.mediaStreamDestinationNode.stream;
+      }
+
+      if (this.localStream !== finalStream) {
+        this.localStream = finalStream;
+        const newTrack = finalStream.getAudioTracks()[0];
+        if (newTrack) {
+          newTrack.enabled = !this.isMuted;
+          for (const peer of this.peerConnections.values()) {
+            const senders = peer.connection.getSenders();
+            const audioSender = senders.find((s) => s.track?.kind === 'audio');
+            if (audioSender) {
+              await audioSender.replaceTrack(newTrack).catch(() => {});
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Error reapplying audio config:', e);
+    }
   }
 
   public getIsMuted(): boolean {
@@ -739,6 +968,20 @@ export class VoiceManager {
       peer.connection.close();
       this.peerConnections.delete(peerId);
     }
+  }
+
+  public resetPeers() {
+    this.peerConnections.forEach((peer) => {
+      if (peer.audioElement) {
+        peer.audioElement.pause();
+        peer.audioElement.srcObject = null;
+        peer.audioElement.remove();
+      }
+      try {
+        peer.connection.close();
+      } catch {}
+    });
+    this.peerConnections.clear();
   }
 
   public leave() {

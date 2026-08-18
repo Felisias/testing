@@ -1,6 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Participant, UserRole } from '../../types';
-import { voiceManager, AudioDeviceInfo } from '../../services/webrtc';
+import {
+  voiceManager,
+  AudioDeviceInfo,
+  NoiseSuppressionMode,
+  AudioSettings,
+} from '../../services/webrtc';
 import {
   Mic,
   MicOff,
@@ -12,10 +17,12 @@ import {
   AlertTriangle,
   ChevronDown,
   ChevronUp,
-  Settings,
-  X,
   Sliders,
+  X,
   Check,
+  Sparkles,
+  ShieldCheck,
+  Layers,
 } from 'lucide-react';
 
 interface VoiceControlsProps {
@@ -41,12 +48,15 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   const [showMicHelp, setShowMicHelp] = useState(false);
   const [showDeviceSettings, setShowDeviceSettings] = useState(false);
 
-  // Devices
+  // Devices & Audio Settings
   const [microphones, setMicrophones] = useState<AudioDeviceInfo[]>([]);
   const [speakers, setSpeakers] = useState<AudioDeviceInfo[]>([]);
   const [selectedMic, setSelectedMic] = useState<string>('default');
   const [selectedSpeaker, setSelectedSpeaker] = useState<string>('default');
   const [deviceNotice, setDeviceNotice] = useState<string | null>(null);
+
+  // Noise Suppression State
+  const [audioSettings, setAudioSettings] = useState<AudioSettings>(() => voiceManager.getAudioSettings());
 
   const [isCollapsed, setIsCollapsed] = useState<boolean>(() => {
     try {
@@ -57,11 +67,12 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   });
 
   useEffect(() => {
-    // If stream already exists, load devices
+    // If stream already exists, load devices and settings
     if (voiceManager.hasLocalStream()) {
       setMicPermissionState('granted');
       loadDevices();
     }
+    setAudioSettings(voiceManager.getAudioSettings());
 
     voiceManager.setVolumeCallback((vol) => {
       setLocalVolume(vol);
@@ -104,6 +115,33 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
     }
   };
 
+  const handleToggleNoiseSuppression = async (enabled: boolean) => {
+    await voiceManager.setNoiseSuppressionEnabled(enabled);
+    setAudioSettings(voiceManager.getAudioSettings());
+    setDeviceNotice(enabled ? 'Шумоподавление включено' : 'Шумоподавление выключено');
+    setTimeout(() => setDeviceNotice(null), 2000);
+  };
+
+  const handleModeChange = async (mode: NoiseSuppressionMode) => {
+    await voiceManager.setNoiseSuppressionMode(mode);
+    setAudioSettings(voiceManager.getAudioSettings());
+  };
+
+  const handleThresholdChange = (val: number) => {
+    voiceManager.setNoiseGateThreshold(val);
+    setAudioSettings(voiceManager.getAudioSettings());
+  };
+
+  const handleToggleEcho = async (enabled: boolean) => {
+    await voiceManager.setEchoCancellation(enabled);
+    setAudioSettings(voiceManager.getAudioSettings());
+  };
+
+  const handleToggleAutoGain = async (enabled: boolean) => {
+    await voiceManager.setAutoGainControl(enabled);
+    setAudioSettings(voiceManager.getAudioSettings());
+  };
+
   const toggleCollapsed = () => {
     setIsCollapsed((prev) => {
       const next = !prev;
@@ -139,10 +177,8 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
   };
 
   const participantList = Object.values(participants) as Participant[];
-  const activeSpeakingCount = participantList.filter((p) => p.isSpeaking && !p.micMuted).length + (isLocalSpeaking && !isMuted ? 1 : 0);
 
   // ---------------- COLLAPSED MINIMAL VIEW ----------------
-  // Fixed dimensions prevent any jumping/resizing when speaking
   if (isCollapsed) {
     return (
       <div
@@ -201,9 +237,18 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
         <div className="flex items-center gap-1.5 px-2 py-1 bg-emerald-50 text-emerald-700 rounded-xl text-xs font-semibold shrink-0">
           <Radio className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
           <span>Голосовая связь</span>
+          {audioSettings.noiseSuppressionEnabled && (
+            <span
+              title="Интеллектуальное шумоподавление активно"
+              className="inline-flex items-center gap-1 text-[10px] font-bold px-1.5 py-0.5 bg-emerald-200/80 text-emerald-900 rounded-md"
+            >
+              <Sparkles className="w-2.5 h-2.5 text-emerald-700" />
+              Шум: Авто
+            </span>
+          )}
         </div>
 
-        {/* Self Indicator - Fixed layout structure with permanent reserved dot/bar */}
+        {/* Self Indicator */}
         <div
           className={`flex items-center gap-2 px-2.5 py-1.5 rounded-xl text-xs font-medium transition shrink-0 ${
             isLocalSpeaking && !isMuted
@@ -213,7 +258,6 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
               : 'bg-slate-100 text-slate-700'
           }`}
         >
-          {/* Constant dimension status circle */}
           <div className="w-2.5 h-2.5 relative flex items-center justify-center shrink-0">
             {isLocalSpeaking && !isMuted && (
               <span className="animate-ping absolute inline-flex h-3.5 w-3.5 rounded-full bg-emerald-400 opacity-75" />
@@ -312,15 +356,20 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
           {isDeafened ? <VolumeX className="w-4 h-4" /> : <Volume2 className="w-4 h-4" />}
         </button>
 
-        {/* Device Settings (Microphone & Speaker Picker) */}
+        {/* Audio & Noise Suppression Settings */}
         <button
           onClick={() => {
             setShowDeviceSettings(!showDeviceSettings);
-            if (!showDeviceSettings) loadDevices();
+            if (!showDeviceSettings) {
+              loadDevices();
+              setAudioSettings(voiceManager.getAudioSettings());
+            }
           }}
-          title="Настройка микрофона и динамиков"
-          className={`p-2 rounded-xl transition cursor-pointer ${
-            showDeviceSettings ? 'bg-blue-100 text-blue-700' : 'hover:bg-slate-100 text-slate-500 hover:text-slate-800'
+          title="Настройка звука и шумоподавления"
+          className={`p-2 rounded-xl transition cursor-pointer flex items-center gap-1 ${
+            showDeviceSettings
+              ? 'bg-blue-100 text-blue-700'
+              : 'hover:bg-slate-100 text-slate-500 hover:text-slate-800'
           }`}
         >
           <Sliders className="w-4 h-4" />
@@ -346,13 +395,13 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
         </button>
       </div>
 
-      {/* Audio Devices Modal / Popover */}
+      {/* Audio Devices & Noise Suppression Settings Modal */}
       {showDeviceSettings && (
-        <div className="absolute right-0 bottom-full mb-3 w-80 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200 p-4 z-50 animate-in fade-in">
+        <div className="absolute right-0 bottom-full mb-3 w-88 max-w-[95vw] bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200 p-4 z-50 animate-in fade-in max-h-[80vh] overflow-y-auto scrollbar-thin">
           <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
             <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
               <Sliders className="w-3.5 h-3.5 text-blue-600" />
-              <span>Настройка звука и устройств</span>
+              <span>Звук и шумоподавление</span>
             </h4>
             <button
               onClick={() => setShowDeviceSettings(false)}
@@ -369,7 +418,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
             </div>
           )}
 
-          <div className="space-y-3 text-xs">
+          <div className="space-y-3.5 text-xs">
             {/* Microphone Selection */}
             <div>
               <label className="block text-[11px] font-bold text-slate-600 uppercase tracking-wider mb-1">
@@ -408,17 +457,121 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
               </select>
             </div>
 
-            {/* Mic Live Volume Level Test */}
+            {/* Noise Suppression Section */}
+            <div className="pt-3 border-t border-slate-100 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5 font-bold text-slate-700">
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                  <span>Шумоподавление</span>
+                </div>
+                <label className="relative inline-flex items-center cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={audioSettings.noiseSuppressionEnabled}
+                    onChange={(e) => handleToggleNoiseSuppression(e.target.checked)}
+                    className="sr-only peer"
+                  />
+                  <div className="w-9 h-5 bg-slate-200 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-600"></div>
+                </label>
+              </div>
+
+              {audioSettings.noiseSuppressionEnabled && (
+                <div className="bg-slate-50 rounded-xl p-2.5 border border-slate-200/80 space-y-2.5">
+                  {/* Mode selector */}
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => handleModeChange('smart')}
+                      className={`px-2 py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition ${
+                        audioSettings.noiseSuppressionMode === 'smart'
+                          ? 'bg-emerald-600 text-white shadow-xs'
+                          : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <Sparkles className="w-3 h-3" />
+                      <span>Умный фильтр</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => handleModeChange('standard')}
+                      className={`px-2 py-1.5 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 transition ${
+                        audioSettings.noiseSuppressionMode === 'standard'
+                          ? 'bg-blue-600 text-white shadow-xs'
+                          : 'bg-white text-slate-700 border border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      <ShieldCheck className="w-3 h-3" />
+                      <span>Стандартное</span>
+                    </button>
+                  </div>
+
+                  {/* Noise Gate threshold slider with live visualization */}
+                  {audioSettings.noiseSuppressionMode === 'smart' && (
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center justify-between text-[11px]">
+                        <span className="text-slate-600 font-medium">Чувствительность отсечения:</span>
+                        <span className="font-mono font-bold text-emerald-700">
+                          {audioSettings.noiseGateThreshold}%
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min="2"
+                        max="50"
+                        value={audioSettings.noiseGateThreshold}
+                        onChange={(e) => handleThresholdChange(Number(e.target.value))}
+                        className="w-full h-1.5 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-emerald-600"
+                      />
+                      <p className="text-[10px] text-slate-500 leading-tight">
+                        Отсекает клики мыши, клавиатуру и фоновый гул ниже выбранного порога.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Additional Audio Enhancements: Echo & Gain */}
+            <div className="pt-2 border-t border-slate-100 space-y-2">
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-slate-600 font-medium">Подавление эха:</span>
+                <input
+                  type="checkbox"
+                  checked={audioSettings.echoCancellation}
+                  onChange={(e) => handleToggleEcho(e.target.checked)}
+                  className="rounded text-blue-600 focus:ring-blue-500 h-4 w-4"
+                />
+              </div>
+              <div className="flex items-center justify-between text-[11px]">
+                <span className="text-slate-600 font-medium">Авто-усиление микрофона:</span>
+                <input
+                  type="checkbox"
+                  checked={audioSettings.autoGainControl}
+                  onChange={(e) => handleToggleAutoGain(e.target.checked)}
+                  className="rounded text-blue-600 focus:ring-blue-500 h-4 w-4"
+                />
+              </div>
+            </div>
+
+            {/* Mic Live Volume Level Test with threshold indicator */}
             <div className="pt-2 border-t border-slate-100">
               <div className="flex items-center justify-between text-[11px] font-semibold text-slate-600 mb-1">
                 <span>Проверка уровня микрофона:</span>
                 <span className="font-mono text-emerald-600">{localVolume}%</span>
               </div>
-              <div className="w-full h-2.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200/80 p-0.5">
+              <div className="relative w-full h-3 bg-slate-100 rounded-full overflow-hidden border border-slate-200/80 p-0.5">
                 <div
                   className="h-full bg-gradient-to-r from-emerald-500 via-teal-500 to-blue-500 rounded-full transition-all duration-75"
                   style={{ width: `${Math.min(100, localVolume * 1.5)}%` }}
                 />
+                {/* Gate threshold marker line */}
+                {audioSettings.noiseSuppressionEnabled && audioSettings.noiseSuppressionMode === 'smart' && (
+                  <div
+                    className="absolute top-0 bottom-0 w-0.5 bg-rose-500 shadow-sm"
+                    style={{ left: `${Math.min(100, audioSettings.noiseGateThreshold * 1.5)}%` }}
+                    title={`Порог активации: ${audioSettings.noiseGateThreshold}%`}
+                  />
+                )}
               </div>
             </div>
           </div>
@@ -437,12 +590,16 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
             </h4>
           </div>
           <p className="text-xs text-slate-600 mb-3">
-            Платформа передает голос напрямую между участниками по технологии WebRTC с подавлением эха и шума.
+            Платформа передает голос напрямую между участниками по технологии WebRTC с интеллектуальным шумоподавлением и подавлением эха.
           </p>
           <div className="space-y-2 text-xs">
             <div className="flex items-center gap-2 text-slate-700">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
               <span>Зеленый круг вокруг имени показывает, кто сейчас говорит</span>
+            </div>
+            <div className="flex items-center gap-2 text-slate-700">
+              <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+              <span>Шумоподавление и порог отсечения можно настроить через иконку ползунков 🎚️</span>
             </div>
             <div className="flex items-center gap-2 text-slate-700">
               <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />

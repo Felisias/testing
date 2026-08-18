@@ -119,6 +119,61 @@ const users: { [username: string]: UserRecord } = {
 const inviteCodes: { [code: string]: InviteCodeRecord } = {};
 const rooms: { [roomId: string]: RoomData } = {};
 
+const DATA_DIR = path.join(process.cwd(), 'data');
+const DATA_FILE = path.join(DATA_DIR, 'tutorboard_storage.json');
+
+function loadDataFromDisk() {
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+    if (fs.existsSync(DATA_FILE)) {
+      const raw = fs.readFileSync(DATA_FILE, 'utf8');
+      const parsed = JSON.parse(raw);
+      if (parsed.users && typeof parsed.users === 'object') {
+        Object.assign(users, parsed.users);
+      }
+      if (parsed.inviteCodes && typeof parsed.inviteCodes === 'object') {
+        Object.assign(inviteCodes, parsed.inviteCodes);
+      }
+      if (parsed.rooms && typeof parsed.rooms === 'object') {
+        Object.entries(parsed.rooms).forEach(([rId, rData]: [string, any]) => {
+          // Reset runtime socket participants on boot
+          rData.participants = {};
+          rooms[rId] = rData;
+        });
+      }
+      console.log(`[Storage] Loaded ${Object.keys(rooms).length} rooms and ${Object.keys(users).length} users from disk`);
+    }
+  } catch (e) {
+    console.warn('[Storage] Could not load data from disk:', e);
+  }
+}
+
+let saveTimer: NodeJS.Timeout | null = null;
+function scheduleSave() {
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    try {
+      if (!fs.existsSync(DATA_DIR)) {
+        fs.mkdirSync(DATA_DIR, { recursive: true });
+      }
+      const dataToSave = {
+        users,
+        inviteCodes,
+        rooms,
+      };
+      fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2), 'utf8');
+    } catch (e) {
+      console.warn('[Storage] Could not save data to disk:', e);
+    }
+  }, 1000);
+}
+
+// Load persisted data immediately
+loadDataFromDisk();
+
 function normalizeRoomId(rawId: string): string {
   if (!rawId) return '';
   let id = String(rawId).trim().toUpperCase();
@@ -685,6 +740,7 @@ async function startServer() {
     };
 
     inviteCodes[code] = record;
+    scheduleSave();
     return res.json({ success: true, inviteCode: record });
   });
 
@@ -698,7 +754,7 @@ async function startServer() {
     return res.json({ inviteCodes: roomCodes });
   });
 
-  // Redeem / Use One-time Invite Code
+  // Redeem / Use One-time Invite Code (Grants permanent board access to user)
   app.post('/api/invite-code/redeem', (req, res) => {
     const { code, username, name } = req.body;
     if (!code) {
@@ -712,29 +768,76 @@ async function startServer() {
       return res.status(404).json({ error: 'Одноразовый ключ не найден или введен неверно' });
     }
 
+    // Ensure room exists
+    const room = getOrCreateRoom(record.roomId, record.roomTitle, record.subject);
+
+    // If key has already been activated before:
+    // Allow the student who activated it (or any authorized user who has it in saved boards) to re-enter!
     if (record.used) {
+      const cleanUser = String(username || '').trim().toLowerCase();
+      const isOriginalUser =
+        (cleanUser && record.usedBy && record.usedBy.toLowerCase() === cleanUser) ||
+        (name && record.usedByName && record.usedByName.toLowerCase() === String(name).trim().toLowerCase());
+
+      let hasSaved = false;
+      if (cleanUser && users[cleanUser]) {
+        hasSaved = (users[cleanUser].savedBoards || []).some(
+          (b) => normalizeRoomId(b.id) === normalizeRoomId(room.id)
+        );
+      }
+
+      // If it is the user who redeemed it or has access, allow unlimited re-entry!
+      if (isOriginalUser || hasSaved || cleanUser === 'guest' || !record.usedBy) {
+        if (cleanUser && users[cleanUser]) {
+          const u = users[cleanUser];
+          const existingIdx = (u.savedBoards || []).findIndex(
+            (b) => normalizeRoomId(b.id) === normalizeRoomId(room.id)
+          );
+          const entry = {
+            id: room.id,
+            title: room.title,
+            subject: room.subject,
+            role: 'student' as const,
+            lastVisited: Date.now(),
+            totalPages: room.totalPages || 1,
+          };
+          if (existingIdx !== -1) {
+            u.savedBoards[existingIdx] = entry;
+          } else {
+            u.savedBoards.unshift(entry);
+          }
+          scheduleSave();
+        }
+
+        return res.json({
+          success: true,
+          roomId: room.id,
+          title: room.title,
+          subject: room.subject,
+          inviteCode: record,
+          reconnected: true,
+        });
+      }
+
       return res.status(400).json({
-        error: `Этот ключ уже был использован ${
+        error: `Этот ключ уже был активирован ${
           record.usedByName ? `пользователем ${record.usedByName}` : ''
         }. Запросите новый ключ у преподавателя.`,
       });
     }
 
-    // Mark as used
+    // First time redemption
     record.used = true;
     record.usedBy = username || 'guest';
     record.usedByName = name || username || 'Ученик';
     record.usedAt = Date.now();
 
-    // Ensure room exists
-    const room = getOrCreateRoom(record.roomId, record.roomTitle, record.subject);
-
-    // If student is logged in, automatically save this board to their account
+    // If student is logged in, automatically save this board to their account for permanent access
     if (username) {
       const cleanUsername = String(username).trim().toLowerCase();
       const user = users[cleanUsername];
       if (user) {
-        const existingIdx = user.savedBoards.findIndex(
+        const existingIdx = (user.savedBoards || []).findIndex(
           (b) => normalizeRoomId(b.id) === normalizeRoomId(room.id)
         );
         const entry = {
@@ -753,6 +856,8 @@ async function startServer() {
       }
     }
 
+    scheduleSave();
+
     return res.json({
       success: true,
       roomId: room.id,
@@ -760,6 +865,41 @@ async function startServer() {
       subject: room.subject,
       inviteCode: record,
     });
+  });
+
+  // Batch Room Status Check (for rendering live board cards in dashboard)
+  app.post('/api/rooms/status-batch', (req, res) => {
+    const { roomIds } = req.body;
+    if (!Array.isArray(roomIds)) {
+      return res.status(400).json({ error: 'roomIds must be an array' });
+    }
+
+    const statuses: Record<string, any> = {};
+    roomIds.forEach((rawId) => {
+      const norm = normalizeRoomId(rawId);
+      const room = findRoom(norm);
+      if (room) {
+        statuses[norm] = {
+          exists: true,
+          id: room.id,
+          title: room.title,
+          subject: room.subject,
+          participantCount: Object.keys(room.participants).length,
+          totalPages: room.totalPages || 1,
+          activePageIndex: room.activePageIndex || 0,
+          isLocked: room.isLocked,
+          createdAt: room.createdAt,
+        };
+      } else {
+        statuses[norm] = {
+          exists: false,
+          id: norm,
+          participantCount: 0,
+        };
+      }
+    });
+
+    return res.json({ statuses });
   });
 
   app.get('/api/rooms/:roomId', (req, res) => {
@@ -784,6 +924,59 @@ async function startServer() {
   io.on('connection', (socket) => {
     let currentRoomId: string | null = null;
     let currentUser: Participant | null = null;
+
+    // Client requests full sync (upon reconnection or reload)
+    socket.on('board:request_sync', () => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+
+      let currentTimerSec = room.timerSeconds;
+      if (room.isTimerRunning) {
+        const elapsed = Math.floor((Date.now() - room.timerUpdatedAt) / 1000);
+        currentTimerSec = Math.max(0, room.timerSeconds - elapsed);
+      }
+
+      socket.emit('room:state', {
+        room: {
+          id: room.id,
+          title: room.title,
+          subject: room.subject,
+          createdAt: room.createdAt,
+          tutorId: room.tutorId,
+          isLocked: room.isLocked,
+          activePageIndex: room.activePageIndex,
+          totalPages: room.totalPages,
+          background: room.background,
+          timerSeconds: currentTimerSec,
+          isTimerRunning: room.isTimerRunning,
+          pages: room.pages,
+          participants: room.participants,
+          chatMessages: room.chatMessages,
+        },
+        self: currentUser,
+      });
+
+      socket.emit('room:joined', {
+        userId: socket.id,
+        roomId: room.id,
+        isLocked: room.isLocked,
+        title: room.title,
+        subject: room.subject,
+        boardState: {
+          pages: room.pages,
+          background: room.background,
+          totalPages: room.totalPages,
+          activePageIndex: room.activePageIndex,
+        },
+        timer: {
+          timerSeconds: currentTimerSec,
+          isTimerRunning: room.isTimerRunning,
+        },
+        chatMessages: room.chatMessages,
+      });
+
+      io.to(room.id).emit('room:participants', Object.values(room.participants));
+    });
 
     // Join room
     socket.on(
@@ -1059,6 +1252,7 @@ async function startServer() {
           room.pages[pageIndex][existingIdx] = element;
         }
 
+        scheduleSave();
         socket.to(currentRoomId).emit('board:element:created', { element, pageIndex });
       }
     );
@@ -1084,6 +1278,7 @@ async function startServer() {
           } else {
             room.pages[pageIndex].push(element);
           }
+          scheduleSave();
           socket.to(currentRoomId).emit('board:element:updated', { element, pageIndex });
         }
       }
@@ -1105,6 +1300,7 @@ async function startServer() {
 
         if (room.pages[pageIndex]) {
           room.pages[pageIndex] = room.pages[pageIndex].filter((el) => el.id !== elementId);
+          scheduleSave();
           socket.to(currentRoomId).emit('board:element:deleted', { elementId, pageIndex });
           socket.to(currentRoomId).emit('board:elements:deleted', { elementIds: [elementId], pageIndex });
         }
@@ -1128,6 +1324,7 @@ async function startServer() {
         if (room.pages[pageIndex]) {
           const idsSet = new Set(elementIds);
           room.pages[pageIndex] = room.pages[pageIndex].filter((el) => !idsSet.has(el.id));
+          scheduleSave();
           socket.to(currentRoomId).emit('board:elements:deleted', { elementIds, pageIndex });
           socket.to(currentRoomId).emit('board:elements:deletedBatch', { elementIds, pageIndex });
         }
@@ -1141,6 +1338,7 @@ async function startServer() {
       if (room.isLocked && currentUser?.role !== 'tutor') return;
 
       room.pages[pageIndex] = [];
+      scheduleSave();
       io.to(currentRoomId).emit('board:cleared', { pageIndex });
       io.to(currentRoomId).emit('board:page:cleared', { pageIndex });
     });
@@ -1160,6 +1358,7 @@ async function startServer() {
         if (room.isLocked && currentUser?.role !== 'tutor') return;
 
         room.pages[pageIndex] = elements || [];
+        scheduleSave();
         socket.to(currentRoomId).emit('board:elements:replaced', { elements: room.pages[pageIndex], pageIndex });
       }
     );
@@ -1169,6 +1368,7 @@ async function startServer() {
       if (!currentRoomId || !rooms[currentRoomId]) return;
       const room = rooms[currentRoomId];
       room.activePageIndex = pageIndex;
+      scheduleSave();
       io.to(currentRoomId).emit('board:page:changed', { pageIndex });
     });
 
@@ -1179,6 +1379,7 @@ async function startServer() {
       room.totalPages += 1;
       room.pages[newPageIndex] = [];
       room.activePageIndex = newPageIndex;
+      scheduleSave();
       io.to(currentRoomId).emit('board:page:added', {
         totalPages: room.totalPages,
         activePageIndex: room.activePageIndex,
@@ -1190,6 +1391,7 @@ async function startServer() {
       if (!currentRoomId || !rooms[currentRoomId]) return;
       const room = rooms[currentRoomId];
       room.background = background;
+      scheduleSave();
       io.to(currentRoomId).emit('board:background:changed', { background });
       io.to(currentRoomId).emit('board:background:updated', { background });
     });
@@ -1200,6 +1402,7 @@ async function startServer() {
       const room = rooms[currentRoomId];
       if (currentUser?.role !== 'tutor') return;
       room.isLocked = !room.isLocked;
+      scheduleSave();
       io.to(currentRoomId).emit('board:lock:changed', { isLocked: room.isLocked });
       io.to(currentRoomId).emit('board:lock:updated', { isLocked: room.isLocked });
     });
@@ -1381,13 +1584,8 @@ async function startServer() {
         io.to(currentRoomId).emit('room:participants', Object.values(room.participants));
         io.to(currentRoomId).emit('chat:message', leaveMsg);
 
-        if (Object.keys(room.participants).length === 0) {
-          setTimeout(() => {
-            if (rooms[currentRoomId!] && Object.keys(rooms[currentRoomId!].participants).length === 0) {
-              delete rooms[currentRoomId!];
-            }
-          }, 3600000);
-        }
+        // Keep rooms persistent so data and access are never lost on reload or disconnect
+        scheduleSave();
       }
     });
   });

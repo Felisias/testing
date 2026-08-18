@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { UserRole, UserAccount, SavedBoard } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { AvatarPicker } from '../Common/AvatarPicker';
@@ -23,6 +23,9 @@ import {
   Compass,
   Check,
   Users,
+  Layers,
+  Copy,
+  BookOpen,
 } from 'lucide-react';
 
 interface AuthModalProps {
@@ -36,6 +39,17 @@ interface AuthModalProps {
     subject?: string;
     userId?: string;
   }) => void;
+}
+
+interface RoomStatusInfo {
+  exists: boolean;
+  id: string;
+  title?: string;
+  subject?: string;
+  participantCount: number;
+  totalPages?: number;
+  activePageIndex?: number;
+  isLocked?: boolean;
 }
 
 const AVATAR_COLORS = [
@@ -75,6 +89,9 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
   // Session & User
   const [currentUser, setCurrentUser] = useState<UserAccount | null>(null);
   const [savedBoards, setSavedBoards] = useState<SavedBoard[]>([]);
+  const [roomStatuses, setRoomStatuses] = useState<Record<string, RoomStatusInfo>>({});
+  const [isRefreshingStatuses, setIsRefreshingStatuses] = useState(false);
+  const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
 
   // Auth Modes: 'login' | 'register' | 'guest'
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'guest'>('login');
@@ -113,6 +130,41 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
   const [authLoading, setAuthLoading] = useState(false);
   const [copiedNotification, setCopiedNotification] = useState<string | null>(null);
 
+  // Fetch status batch for saved boards
+  const fetchRoomStatuses = useCallback(async (boards: SavedBoard[]) => {
+    if (!boards || boards.length === 0) return;
+    try {
+      setIsRefreshingStatuses(true);
+      const roomIds = boards.map((b) => b.id);
+      const res = await fetch('/api/rooms/status-batch', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ roomIds }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data?.statuses) {
+          setRoomStatuses(data.statuses);
+        }
+      }
+    } catch (e) {
+      console.warn('Could not fetch room statuses:', e);
+    } finally {
+      setIsRefreshingStatuses(false);
+    }
+  }, []);
+
+  // Poll room statuses periodically
+  useEffect(() => {
+    if (savedBoards.length > 0) {
+      fetchRoomStatuses(savedBoards);
+      const interval = setInterval(() => {
+        fetchRoomStatuses(savedBoards);
+      }, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [savedBoards, fetchRoomStatuses]);
+
   // Load session & history
   useEffect(() => {
     try {
@@ -148,7 +200,9 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                 merged.forEach((b) => {
                   if (!srvMap.has(b.id)) srvMap.set(b.id, b);
                 });
-                setSavedBoards(Array.from(srvMap.values()));
+                const finalBoards = Array.from(srvMap.values());
+                setSavedBoards(finalBoards);
+                fetchRoomStatuses(finalBoards);
               }
             })
             .catch(() => {});
@@ -156,12 +210,13 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
       } else {
         if (localRecent.length > 0) {
           setSavedBoards(localRecent);
+          fetchRoomStatuses(localRecent);
         }
       }
     } catch (err) {
       console.warn('Session init error:', err);
     }
-  }, []);
+  }, [fetchRoomStatuses]);
 
   // Check URL query param ?invite=CODE or legacy ?room=CODE
   useEffect(() => {
@@ -191,6 +246,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
       list.unshift(entry);
       localStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(list.slice(0, 30)));
       setSavedBoards(list);
+      fetchRoomStatuses(list);
     } catch {}
 
     if (currentUser) {
@@ -1075,52 +1131,156 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
               </div>
             )}
 
-            {/* ----------------- SAVED RECENT ROOMS ----------------- */}
-            {savedBoards.length > 0 && (
-              <div className="mt-6 pt-5 border-t border-slate-100">
-                <div className="flex items-center justify-between mb-2.5">
-                  <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider flex items-center gap-1.5">
-                    <Clock className="w-3.5 h-3.5 text-blue-600" />
-                    <span>Недавние занятия ({savedBoards.length})</span>
-                  </span>
+            {/* ----------------- ACCESSIBLE BOARDS CARDS SECTION ----------------- */}
+            <div className="mt-6 pt-5 border-t border-slate-100">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-2">
+                  <BookOpen className="w-4 h-4 text-blue-600" />
+                  <span className="text-xs font-bold text-slate-800">Доступные вам доски</span>
+                  {savedBoards.length > 0 && (
+                    <span className="px-2 py-0.5 bg-blue-50 text-blue-700 border border-blue-200/80 rounded-full text-[10px] font-bold">
+                      {savedBoards.length}
+                    </span>
+                  )}
                 </div>
 
-                <div className="space-y-1.5 max-h-40 overflow-y-auto pr-1 scrollbar-thin">
-                  {savedBoards.map((b) => (
-                    <div
-                      key={b.id}
-                      onClick={() => handleOpenSavedBoard(b)}
-                      className="p-2.5 bg-slate-50/70 hover:bg-blue-50/50 border border-slate-200/80 hover:border-blue-300 rounded-xl transition flex items-center justify-between gap-3 text-xs cursor-pointer group shadow-2xs"
-                    >
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-blue-600 text-[11px]">{b.id}</span>
-                          <span className="font-semibold text-slate-800 truncate">{b.title || 'Урок'}</span>
-                        </div>
-                        <div className="text-[10px] text-slate-500 flex items-center gap-1.5 mt-0.5">
-                          <span>{formatDate(b.lastVisited)}</span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={(e) => handleDeleteSavedRoom(b.id, e)}
-                          title="Удалить из недавних"
-                          className="p-1 text-slate-400 hover:text-rose-600 opacity-40 group-hover:opacity-100 transition rounded"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
-                        <span className="px-2.5 py-1 bg-white group-hover:bg-blue-600 text-slate-700 group-hover:text-white border border-slate-200/80 group-hover:border-transparent font-medium text-[11px] rounded-lg transition flex items-center gap-1 shadow-2xs">
-                          <span>Войти</span>
-                          <ArrowRight className="w-3 h-3" />
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
+                {savedBoards.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => fetchRoomStatuses(savedBoards)}
+                    title="Обновить статус досок"
+                    className="flex items-center gap-1 text-[11px] text-slate-500 hover:text-blue-600 transition cursor-pointer"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isRefreshingStatuses ? 'animate-spin text-blue-600' : ''}`} />
+                    <span>Обновить</span>
+                  </button>
+                )}
               </div>
-            )}
+
+              {savedBoards.length === 0 ? (
+                <div className="p-4 bg-slate-50/80 border border-dashed border-slate-200 rounded-2xl text-center">
+                  <div className="text-xl mb-1">📋</div>
+                  <div className="text-xs font-bold text-slate-700 mb-0.5">У вас пока нет доступных досок</div>
+                  <p className="text-[11px] text-slate-500 max-w-[340px] mx-auto">
+                    {currentUser?.role === 'tutor'
+                      ? 'Создайте свою первую комнату выше, чтобы начать урок с учениками.'
+                      : 'Введите одноразовый ключ от преподавателя выше, и доска навсегда появится в вашем списке!'}
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1 scrollbar-thin">
+                  {savedBoards.map((b) => {
+                    const normId = normalizeRoomCode(b.id);
+                    const status = roomStatuses[normId] || roomStatuses[b.id];
+                    const onlineCount = status?.participantCount ?? 0;
+                    const pageCount = status?.totalPages ?? (b as any).totalPages ?? 1;
+                    const isTutorBoard = b.role === 'tutor' || (currentUser && currentUser.role === 'tutor');
+
+                    return (
+                      <div
+                        key={b.id}
+                        onClick={() => handleOpenSavedBoard(b)}
+                        className="p-3 bg-white hover:bg-blue-50/40 border border-slate-200/90 hover:border-blue-300 rounded-2xl transition-all duration-150 shadow-2xs hover:shadow-md hover:shadow-blue-600/5 cursor-pointer group flex flex-col gap-2 relative"
+                      >
+                        {/* Top Card Row: Title & Code Badge */}
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-bold text-xs text-slate-900 truncate group-hover:text-blue-600 transition">
+                                {b.title || 'Урок с репетитором'}
+                              </span>
+                              {b.subject && (
+                                <span className="px-2 py-0.5 bg-slate-100 text-slate-600 rounded-md text-[10px] font-medium shrink-0">
+                                  {b.subject}
+                                </span>
+                              )}
+                            </div>
+
+                            {/* Clickable Code Tag */}
+                            <div className="flex items-center gap-2 mt-1">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  navigator.clipboard.writeText(b.id);
+                                  setCopiedCardId(b.id);
+                                  showNotice(`Код ${b.id} скопирован`);
+                                  setTimeout(() => setCopiedCardId(null), 2000);
+                                }}
+                                title="Нажмите, чтобы скопировать код"
+                                className="inline-flex items-center gap-1 px-2 py-0.5 bg-slate-100 hover:bg-blue-100/70 border border-slate-200 text-slate-700 hover:text-blue-800 rounded-lg text-[10px] font-mono font-bold transition cursor-pointer"
+                              >
+                                <span>{b.id}</span>
+                                {copiedCardId === b.id ? (
+                                  <Check className="w-2.5 h-2.5 text-emerald-600" />
+                                ) : (
+                                  <Copy className="w-2.5 h-2.5 opacity-60" />
+                                )}
+                              </button>
+
+                              {/* Access status badge */}
+                              <span
+                                className={`text-[10px] font-semibold flex items-center gap-1 ${
+                                  isTutorBoard ? 'text-amber-700' : 'text-emerald-700'
+                                }`}
+                              >
+                                {isTutorBoard ? '👨‍🏫 Владелец' : '🎓 Доступ открыт'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {/* Action Buttons */}
+                          <div className="flex items-center gap-1.5 shrink-0">
+                            <button
+                              type="button"
+                              onClick={(e) => handleDeleteSavedRoom(b.id, e)}
+                              title="Удалить доску"
+                              className="p-1.5 text-slate-400 hover:text-rose-600 opacity-60 group-hover:opacity-100 transition rounded-lg hover:bg-rose-50"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+
+                            <span className="px-3 py-1.5 bg-blue-50 group-hover:bg-blue-600 text-blue-700 group-hover:text-white border border-blue-200/80 group-hover:border-transparent font-bold text-xs rounded-xl transition flex items-center gap-1 shadow-2xs">
+                              <span>Войти</span>
+                              <ArrowRight className="w-3.5 h-3.5" />
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Bottom Metadata Strip: Online Indicator & Page count & Last Visit */}
+                        <div className="flex items-center justify-between text-[10px] text-slate-500 pt-1.5 border-t border-slate-100/80">
+                          <div className="flex items-center gap-3">
+                            {/* Live Online Badge */}
+                            {onlineCount > 0 ? (
+                              <span className="flex items-center gap-1 text-emerald-700 font-bold bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200/80">
+                                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                                <span>{onlineCount} в сети</span>
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-slate-400">
+                                <span className="w-1.5 h-1.5 rounded-full bg-slate-300" />
+                                <span>Офлайн</span>
+                              </span>
+                            )}
+
+                            {/* Total pages */}
+                            <span className="flex items-center gap-1 text-slate-600 font-medium">
+                              <Layers className="w-3 h-3 text-slate-400" />
+                              <span>{pageCount} стр.</span>
+                            </span>
+                          </div>
+
+                          <div className="flex items-center gap-1 text-slate-400">
+                            <Clock className="w-3 h-3" />
+                            <span>{formatDate(b.lastVisited)}</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
           </div>
         </div>
 

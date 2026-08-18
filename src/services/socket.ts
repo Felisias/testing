@@ -7,8 +7,11 @@ export function getSocket(): Socket {
     socket = io({
       autoConnect: true,
       reconnection: true,
-      reconnectionAttempts: 20,
-      reconnectionDelay: 1000,
+      reconnectionAttempts: Infinity,
+      reconnectionDelay: 500,
+      reconnectionDelayMax: 2000,
+      randomizationFactor: 0.2,
+      timeout: 10000,
       transports: ['websocket', 'polling'],
     });
   } else if (!socket.connected) {
@@ -17,9 +20,18 @@ export function getSocket(): Socket {
   return socket;
 }
 
+export function forceReconnectSocket(): Socket {
+  const s = getSocket();
+  if (!s.connected) {
+    s.connect();
+  }
+  return s;
+}
+
 export function disconnectSocket() {
   if (socket) {
     socket.disconnect();
     socket = null;
   }
 }
+
