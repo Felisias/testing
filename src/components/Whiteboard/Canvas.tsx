@@ -1209,6 +1209,44 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [canEdit, selectedElementId, elements, pageIndex, userName, userColor, textInputPos, screenToWorld]);
 
+  // Immediately broadcast initial cursor position upon entering / switching page
+  useEffect(() => {
+    const socket = getSocket();
+    const w = containerDimensions.width || (typeof window !== 'undefined' ? window.innerWidth : 1000);
+    const h = containerDimensions.height || (typeof window !== 'undefined' ? window.innerHeight : 700);
+    const initialWorldX = Math.round((w / 2 - panOffset.x) / zoom);
+    const initialWorldY = Math.round((h / 2 - panOffset.y) / zoom);
+
+    socket.emit('cursor:move', {
+      x: initialWorldX,
+      y: initialWorldY,
+      pageIndex,
+    });
+  }, [pageIndex, panOffset.x, panOffset.y, zoom, containerDimensions.width, containerDimensions.height]);
+
+  // Global pointer move listener across whole browser window to immediately update cursor
+  useEffect(() => {
+    let lastEmit = 0;
+    const handleGlobalMove = (e: PointerEvent) => {
+      const now = Date.now();
+      if (now - lastEmit < 40) return; // ~25-30fps
+      lastEmit = now;
+
+      const wp = screenToWorld(e.clientX, e.clientY);
+      mouseWorldPosRef.current = wp;
+      getSocket().emit('cursor:move', {
+        x: wp.x,
+        y: wp.y,
+        pageIndex,
+      });
+    };
+
+    window.addEventListener('pointermove', handleGlobalMove, { passive: true });
+    return () => {
+      window.removeEventListener('pointermove', handleGlobalMove);
+    };
+  }, [screenToWorld, pageIndex]);
+
   return (
     <div
       ref={containerRef}
