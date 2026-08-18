@@ -102,6 +102,7 @@ export const Canvas: React.FC<CanvasProps> = ({
   const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const copiedElementRef = useRef<WhiteboardElement | null>(null);
   const mouseWorldPosRef = useRef<Point>({ x: 0, y: 0 });
+  const lastScreenPointerRef = useRef<{ clientX: number; clientY: number } | null>(null);
 
   // Text inline input state
   const [textInputPos, setTextInputPos] = useState<Point | null>(null);
@@ -1209,31 +1210,41 @@ export const Canvas: React.FC<CanvasProps> = ({
     };
   }, [canEdit, selectedElementId, elements, pageIndex, userName, userColor, textInputPos, screenToWorld]);
 
-  // Immediately broadcast initial cursor position upon entering / switching page
+  // Restore last real cursor position on mount (e.g. after reload/reconnection)
   useEffect(() => {
-    const socket = getSocket();
-    const w = containerDimensions.width || (typeof window !== 'undefined' ? window.innerWidth : 1000);
-    const h = containerDimensions.height || (typeof window !== 'undefined' ? window.innerHeight : 700);
-    const initialWorldX = Math.round((w / 2 - panOffset.x) / zoom);
-    const initialWorldY = Math.round((h / 2 - panOffset.y) / zoom);
+    try {
+      const stored = sessionStorage.getItem('tutorboard_my_last_cursor');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (typeof parsed?.x === 'number' && typeof parsed?.y === 'number') {
+          mouseWorldPosRef.current = { x: parsed.x, y: parsed.y };
+          getSocket().emit('cursor:move', {
+            x: parsed.x,
+            y: parsed.y,
+            pageIndex,
+          });
+        }
+      }
+    } catch {}
+  }, [pageIndex]);
 
-    socket.emit('cursor:move', {
-      x: initialWorldX,
-      y: initialWorldY,
-      pageIndex,
-    });
-  }, [pageIndex, panOffset.x, panOffset.y, zoom, containerDimensions.width, containerDimensions.height]);
-
-  // Global pointer move listener across whole browser window to immediately update cursor
+  // Global window pointer listener: instantly tracks actual mouse position across entire window
   useEffect(() => {
     let lastEmit = 0;
-    const handleGlobalMove = (e: PointerEvent) => {
+    const handleGlobalPointer = (e: MouseEvent | PointerEvent) => {
+      lastScreenPointerRef.current = { clientX: e.clientX, clientY: e.clientY };
+
       const now = Date.now();
-      if (now - lastEmit < 40) return; // ~25-30fps
+      if (now - lastEmit < 30) return; // ~30fps throttle
       lastEmit = now;
 
       const wp = screenToWorld(e.clientX, e.clientY);
       mouseWorldPosRef.current = wp;
+
+      try {
+        sessionStorage.setItem('tutorboard_my_last_cursor', JSON.stringify({ x: wp.x, y: wp.y, pageIndex }));
+      } catch {}
+
       getSocket().emit('cursor:move', {
         x: wp.x,
         y: wp.y,
@@ -1241,11 +1252,33 @@ export const Canvas: React.FC<CanvasProps> = ({
       });
     };
 
-    window.addEventListener('pointermove', handleGlobalMove, { passive: true });
+    window.addEventListener('pointermove', handleGlobalPointer, { passive: true });
+    window.addEventListener('mousemove', handleGlobalPointer, { passive: true });
+    window.addEventListener('pointerdown', handleGlobalPointer, { passive: true });
+    window.addEventListener('pointerenter', handleGlobalPointer, { passive: true });
+
     return () => {
-      window.removeEventListener('pointermove', handleGlobalMove);
+      window.removeEventListener('pointermove', handleGlobalPointer);
+      window.removeEventListener('mousemove', handleGlobalPointer);
+      window.removeEventListener('pointerdown', handleGlobalPointer);
+      window.removeEventListener('pointerenter', handleGlobalPointer);
     };
   }, [screenToWorld, pageIndex]);
+
+  // When panning or zooming, update world position for the current resting mouse pointer
+  useEffect(() => {
+    if (!lastScreenPointerRef.current) return;
+    const wp = screenToWorld(lastScreenPointerRef.current.clientX, lastScreenPointerRef.current.clientY);
+    mouseWorldPosRef.current = wp;
+    try {
+      sessionStorage.setItem('tutorboard_my_last_cursor', JSON.stringify({ x: wp.x, y: wp.y, pageIndex }));
+    } catch {}
+    getSocket().emit('cursor:move', {
+      x: wp.x,
+      y: wp.y,
+      pageIndex,
+    });
+  }, [panOffset.x, panOffset.y, zoom, pageIndex, screenToWorld]);
 
   return (
     <div
@@ -1274,7 +1307,8 @@ export const Canvas: React.FC<CanvasProps> = ({
 
       {/* Real-time Multiplayer Cursors & Off-screen Indicators */}
       {(Object.values(cursors) as CursorPosition[]).map((cur) => {
-        if (cur.userId === 'self') return null;
+        const currentSocketId = getSocket().id;
+        if (!cur || cur.userId === 'self' || (currentSocketId && cur.userId === currentSocketId)) return null;
         const screenX = cur.x * zoom + panOffset.x;
         const screenY = cur.y * zoom + panOffset.y;
 

@@ -1077,14 +1077,6 @@ async function startServer() {
         socket.join(room.id);
 
         if (!room.cursors) room.cursors = {};
-        // Initial cursor position for new or returning user
-        const initialCursor = {
-          x: 480,
-          y: 320,
-          pageIndex: room.activePageIndex || 0,
-          updatedAt: Date.now(),
-        };
-        room.cursors[socket.id] = initialCursor;
 
         // Calculate accurate current timer if running
         let currentTimerSec = room.timerSeconds;
@@ -1114,7 +1106,7 @@ async function startServer() {
           self: currentUser,
         });
 
-        // Immediately send all existing participants' cursors to the newly joined client
+        // Immediately send all existing participants' real cursors to the newly joined client
         for (const [sId, cPos] of Object.entries(room.cursors)) {
           const p = room.participants[sId];
           if (p && sId !== socket.id) {
@@ -1157,18 +1149,6 @@ async function startServer() {
         // Notify other participants in the room
         socket.to(room.id).emit('participant:joined', currentUser);
         socket.to(room.id).emit('room:userJoined', currentUser);
-
-        // Broadcast newly joined user's initial cursor to other users right away
-        socket.to(room.id).emit('cursor:moved', {
-          userId: socket.id,
-          userName: currentUser.name,
-          role: currentUser.role,
-          avatar: currentUser.avatar,
-          color: currentUser.color,
-          x: initialCursor.x,
-          y: initialCursor.y,
-          pageIndex: initialCursor.pageIndex,
-        });
 
         // Add system message
         const joinMsg: ChatMessage = {
