@@ -114,7 +114,9 @@ export class VoiceManager {
     this.setupUserGestureUnlock();
   }
 
-  private getOrCreateAudioContainer(): HTMLElement {
+  private pendingPlayElements: Set<HTMLAudioElement> = new Set();
+
+  public getOrCreateAudioContainer(): HTMLElement {
     if (this.audioContainer && document.body.contains(this.audioContainer)) {
       return this.audioContainer;
     }
@@ -145,22 +147,39 @@ export class VoiceManager {
     return this.audioContext;
   }
 
-  // Auto unlock browser audio playback on user gestures
+  // Auto unlock browser audio playback on user gestures & room entry
+  public unlockAudio() {
+    const ctx = this.audioContext;
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {});
+    }
+    this.peerConnections.forEach((peer) => {
+      if (peer.audioElement) {
+        peer.audioElement.muted = this.isDeafened;
+        peer.audioElement.volume = 1.0;
+        if (peer.audioElement.paused && !this.isDeafened) {
+          peer.audioElement.play().catch(() => {
+            this.pendingPlayElements.add(peer.audioElement!);
+          });
+        }
+      }
+    });
+
+    // Play any pending audio elements
+    this.pendingPlayElements.forEach((el) => {
+      if (el && !this.isDeafened) {
+        el.play()
+          .then(() => {
+            this.pendingPlayElements.delete(el);
+          })
+          .catch(() => {});
+      }
+    });
+  }
+
   private setupUserGestureUnlock() {
     const unlock = () => {
-      const ctx = this.audioContext;
-      if (ctx && ctx.state === 'suspended') {
-        ctx.resume().catch(() => {});
-      }
-      this.peerConnections.forEach((peer) => {
-        if (peer.audioElement) {
-          peer.audioElement.muted = this.isDeafened;
-          peer.audioElement.volume = 1.0;
-          if (peer.audioElement.paused && !this.isDeafened) {
-            peer.audioElement.play().catch(() => {});
-          }
-        }
-      });
+      this.unlockAudio();
     };
 
     window.addEventListener('click', unlock, { passive: true });
@@ -169,7 +188,11 @@ export class VoiceManager {
     window.addEventListener('touchstart', unlock, { passive: true });
   }
 
+  private socketListenersAttached = false;
   private setupSocketListeners() {
+    if (this.socketListenersAttached) return;
+    this.socketListenersAttached = true;
+
     const socket = getSocket();
 
     socket.on(
@@ -184,16 +207,18 @@ export class VoiceManager {
         }
 
         const connection = peer.connection;
+        const myId = socket.id || '';
+        const isPolite = myId < from;
 
         try {
           if (type === 'offer') {
             const offerCollision = peer.makingOffer || connection.signalingState !== 'stable';
-            peer.ignoreOffer = !peer.isPolite && offerCollision;
+            peer.ignoreOffer = !isPolite && offerCollision;
             if (peer.ignoreOffer) {
               return;
             }
 
-            if (offerCollision && peer.isPolite) {
+            if (offerCollision && isPolite) {
               try {
                 await connection.setLocalDescription({ type: 'rollback' } as any);
               } catch (e) {}
@@ -269,12 +294,15 @@ export class VoiceManager {
     );
 
     socket.on('participant:left', ({ userId }: { userId: string }) => {
-      this.removePeer(userId);
+      if (userId) this.removePeer(userId);
     });
 
     socket.on('participant:joined', (p: { id: string }) => {
-      if (p && p.id && p.id !== socket.id) {
-        this.callPeer(p.id);
+      const myId = socket.id;
+      if (p && p.id && p.id !== myId) {
+        if (!this.peerConnections.has(p.id)) {
+          this.createPeerConnection(p.id);
+        }
       }
     });
 
@@ -283,9 +311,7 @@ export class VoiceManager {
       if (!Array.isArray(list)) return;
       list.forEach((p) => {
         if (p && p.id && p.id !== myId && !this.peerConnections.has(p.id)) {
-          if (myId && p.id > myId) {
-            this.callPeer(p.id);
-          }
+          this.createPeerConnection(p.id);
         }
       });
     });
@@ -563,7 +589,9 @@ export class VoiceManager {
             try {
               await audioSender.replaceTrack(localTrack);
             } catch (e) {
-              connection.addTrack(localTrack, this.localStream);
+              try {
+                connection.addTrack(localTrack, this.localStream);
+              } catch (err) {}
             }
           } else {
             try {
@@ -618,7 +646,7 @@ export class VoiceManager {
       connection.addTransceiver('audio', { direction: 'sendrecv' });
     } catch (e) {}
 
-    // Add local tracks if available
+    // Add local tracks if already available
     if (this.localStream) {
       this.localStream.getAudioTracks().forEach((track) => {
         try {
@@ -626,6 +654,26 @@ export class VoiceManager {
         } catch (e) {}
       });
     }
+
+    // Perfect negotiation: trigger offer when negotiation is needed
+    connection.onnegotiationneeded = async () => {
+      try {
+        peer.makingOffer = true;
+        if (connection.signalingState !== 'stable') return;
+        const offer = await connection.createOffer({ offerToReceiveAudio: true });
+        if (connection.signalingState !== 'stable') return;
+        await connection.setLocalDescription(offer);
+        getSocket().emit('voice:signal', {
+          to: peerId,
+          signal: connection.localDescription,
+          type: 'offer',
+        });
+      } catch (err) {
+        console.warn('onnegotiationneeded error for peer:', peerId, err);
+      } finally {
+        peer.makingOffer = false;
+      }
+    };
 
     // ICE Candidate
     connection.onicecandidate = (event) => {
@@ -651,15 +699,18 @@ export class VoiceManager {
       }
     };
 
-    // Remote Audio Stream (outputs EXCLUSIVELY to HTMLAudioElement with setSinkId)
+    // Remote Audio Stream
     connection.ontrack = (event) => {
-      const stream = (event.streams && event.streams[0]) || new MediaStream([event.track]);
+      const stream = (event.streams && event.streams[0]) ? event.streams[0] : new MediaStream([event.track]);
       let audioEl = peer.audioElement;
 
       if (!audioEl) {
         audioEl = document.createElement('audio');
         audioEl.autoplay = true;
+        (audioEl as any).playsInline = true;
+        (audioEl as any).webkitPlaysinline = true;
         audioEl.muted = this.isDeafened;
+        audioEl.volume = 1.0;
         audioEl.setAttribute('playsinline', 'true');
         audioEl.setAttribute('data-peer-id', peerId);
 
@@ -693,7 +744,9 @@ export class VoiceManager {
 
       const playAudio = () => {
         if (audioEl && !this.isDeafened) {
-          audioEl.play().catch(() => {});
+          audioEl.play().catch(() => {
+            this.pendingPlayElements.add(audioEl!);
+          });
         }
       };
 
@@ -705,6 +758,14 @@ export class VoiceManager {
     };
 
     this.peerConnections.set(peerId, peer);
+
+    // If we have an active stream or if polite peer, initiate call
+    if (this.localStream || isPolite) {
+      setTimeout(() => {
+        this.callPeer(peerId);
+      }, 50);
+    }
+
     return peer;
   }
 
@@ -982,6 +1043,13 @@ export class VoiceManager {
       } catch {}
     });
     this.peerConnections.clear();
+  }
+
+  public initializeForRoom(roomId: string) {
+    this.resetPeers();
+    this.setupSocketListeners();
+    this.getOrCreateAudioContainer();
+    this.unlockAudio();
   }
 
   public leave() {

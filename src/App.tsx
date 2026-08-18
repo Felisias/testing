@@ -307,7 +307,8 @@ export default function App() {
     if (targetSubject) setSubject(targetSubject);
     setIsInRoom(true);
 
-    // Set initial voice state to muted
+    // Initialize voice audio context and peer mesh cleanly for this room
+    voiceManager.initializeForRoom(targetRoomId);
     voiceManager.setMicrophoneMuted(true);
 
     const socket = getSocket();
