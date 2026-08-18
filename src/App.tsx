@@ -639,20 +639,27 @@ export default function App() {
     socket.on('cursor:moved', (data: any) => {
       const cUserId = data.userId;
       if (!cUserId) return;
-      setCursors((prev) => ({
-        ...prev,
-        [cUserId]: {
+      const cName = data.userName || 'Пользователь';
+      setCursors((prev) => {
+        const next: Record<string, CursorPosition> = {};
+        for (const [uid, cur] of Object.entries(prev) as [string, CursorPosition][]) {
+          // Keep all active cursors, but deduplicate if this user previously had another socket ID
+          if (uid === 'self' || (uid !== cUserId && cur?.userName !== cName)) {
+            next[uid] = cur;
+          }
+        }
+        next[cUserId] = {
           userId: cUserId,
           x: data.x,
           y: data.y,
-          userName: data.userName || 'Пользователь',
-          userColor: data.color || data.userColor || '#2563EB',
+          userName: cName,
           color: data.color || data.userColor || '#2563EB',
           role: data.role || data.userRole || 'student',
           avatar: data.avatar || data.userAvatar || '🎓',
           lastActive: Date.now(),
-        },
-      }));
+        };
+        return next;
+      });
     });
 
     const handleLaser = (point: LaserPoint) => {
@@ -741,28 +748,22 @@ export default function App() {
     };
   }, [isInRoom, roomId]);
 
-  // Periodic cleanup for stale/ghost cursors (disconnect without explicit leave)
+  // Keep cursors synchronized with active participants without dropping stationary/idle cursors
   useEffect(() => {
-    const interval = setInterval(() => {
-      const now = Date.now();
-      setCursors((prev) => {
-        let changed = false;
-        const next: Record<string, CursorPosition> = {};
-        for (const [uid, cur] of Object.entries(prev) as [string, CursorPosition][]) {
-          if (uid === 'self') {
-            next[uid] = cur;
-          } else if (cur?.lastActive && now - cur.lastActive > 4000) {
-            changed = true; // Inactive / dropped user cursor cleaned up
-          } else {
-            next[uid] = cur;
-          }
+    const activeIds = new Set(Object.keys(participants));
+    setCursors((prev) => {
+      let changed = false;
+      const next: Record<string, CursorPosition> = {};
+      for (const [uid, cur] of Object.entries(prev) as [string, CursorPosition][]) {
+        if (uid === 'self' || activeIds.has(uid)) {
+          next[uid] = cur;
+        } else {
+          changed = true; // Dropped if user is no longer a room participant
         }
-        return changed ? next : prev;
-      });
-    }, 1500);
-
-    return () => clearInterval(interval);
-  }, []);
+      }
+      return changed ? next : prev;
+    });
+  }, [participants]);
 
   const handleManualReconnect = () => {
     setIsReconnecting(true);
