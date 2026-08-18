@@ -172,6 +172,7 @@ export interface CursorPosition {
   color: string;
   x: number;
   y: number;
+  lastActive?: number;
 }
 
 export interface ChatMessage {

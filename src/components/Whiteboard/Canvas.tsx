@@ -16,7 +16,7 @@ import {
   WhiteboardAction,
 } from '../../types';
 import { getSocket } from '../../services/socket';
-import { Sparkles, Trash2, Move, ZoomIn, ZoomOut, RotateCcw, Navigation } from 'lucide-react';
+import { Sparkles, Trash2, Move, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 
 interface CanvasProps {
   tool: ToolType;
@@ -1283,20 +1283,19 @@ export const Canvas: React.FC<CanvasProps> = ({
         const angleRad = Math.atan2(dy, dx);
         const angleDeg = (angleRad * 180) / Math.PI;
 
-        const padX = 75;
-        const padY = 40;
-        let t = 1;
-        if (Math.abs(dx) > 0.001) {
-          const tx = dx > 0 ? (w - padX - cx) / dx : (padX - cx) / dx;
-          t = Math.min(t, Math.max(0, tx));
-        }
-        if (Math.abs(dy) > 0.001) {
-          const ty = dy > 0 ? (h - padY - cy) / dy : (padY - cy) / dy;
-          t = Math.min(t, Math.max(0, ty));
-        }
+        const padX = 85;
+        const padY = 45;
 
-        const edgeX = cx + dx * t;
-        const edgeY = cy + dy * t;
+        // Find ray intersection from center (cx, cy) along (dx, dy) with bounding margin
+        const maxDx = dx > 0 ? (w - padX - cx) : (padX - cx);
+        const maxDy = dy > 0 ? (h - padY - cy) : (padY - cy);
+
+        const tx = Math.abs(dx) > 0.001 ? maxDx / dx : 1;
+        const ty = Math.abs(dy) > 0.001 ? maxDy / dy : 1;
+        const t = Math.min(1, Math.max(0, Math.min(tx, ty)));
+
+        const edgeX = Math.max(padX, Math.min(w - padX, cx + dx * t));
+        const edgeY = Math.max(padY, Math.min(h - padY, cy + dy * t));
 
         return (
           <button
@@ -1310,7 +1309,7 @@ export const Canvas: React.FC<CanvasProps> = ({
               });
             }}
             title={`Курсор пользователя ${cur.userName} находится за экраном. Нажмите, чтобы перейти к нему`}
-            className="absolute z-30 -translate-x-1/2 -translate-y-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full shadow-xl border border-white/80 text-white text-xs font-semibold cursor-pointer transition-transform hover:scale-110 active:scale-95"
+            className="absolute z-30 -translate-x-1/2 -translate-y-1/2 flex items-center gap-1.5 px-3 py-1.5 rounded-full shadow-xl border border-white/90 text-white text-xs font-semibold cursor-pointer transition-transform hover:scale-110 active:scale-95 select-none"
             style={{
               left: `${edgeX}px`,
               top: `${edgeY}px`,
@@ -1318,12 +1317,26 @@ export const Canvas: React.FC<CanvasProps> = ({
               boxShadow: `0 4px 16px ${cur.color || '#3B82F6'}88`,
             }}
           >
-            <Navigation
-              className="w-3.5 h-3.5 flex-shrink-0"
+            {/* Precise Directional Vector Arrow pointing towards the cursor's location */}
+            <div
+              className="w-4 h-4 flex items-center justify-center flex-shrink-0"
               style={{
-                transform: `rotate(${angleDeg - 45}deg)`,
+                transform: `rotate(${angleDeg}deg)`,
               }}
-            />
+            >
+              <svg
+                className="w-3.5 h-3.5"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2.8"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M5 12h14" />
+                <path d="m13 6 6 6-6 6" />
+              </svg>
+            </div>
             <span className="text-[11px] leading-none flex items-center gap-1 max-w-[110px] truncate">
               <span>{cur.avatar || (cur.role === 'tutor' ? '👨‍🏫' : '🎓')}</span>
               <span className="truncate">{cur.userName}</span>

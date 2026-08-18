@@ -376,6 +376,7 @@ export default function App() {
     socket.off('board:lock:changed');
     socket.off('board:lock:updated');
     socket.off('cursor:moved');
+    socket.off('cursor:removed');
     socket.off('laser:pointer');
     socket.off('board:lasered');
     socket.off('tutor:cheered');
@@ -414,6 +415,16 @@ export default function App() {
 
       if (r.participants) {
         setParticipants(r.participants);
+        const activeIds = new Set(Object.keys(r.participants));
+        setCursors((prev) => {
+          const next: Record<string, CursorPosition> = {};
+          for (const [uid, cur] of Object.entries(prev) as [string, CursorPosition][]) {
+            if (uid === 'self' || activeIds.has(uid)) {
+              next[uid] = cur;
+            }
+          }
+          return next;
+        });
       }
       if (Array.isArray(r.chatMessages)) {
         setChatMessages(r.chatMessages);
@@ -441,15 +452,43 @@ export default function App() {
     socket.on('room:participants', (list: Participant[]) => {
       if (!Array.isArray(list)) return;
       const map: Record<string, Participant> = {};
+      const activeIds = new Set<string>();
       list.forEach((p) => {
-        if (p?.id) map[p.id] = p;
+        if (p?.id) {
+          map[p.id] = p;
+          activeIds.add(p.id);
+        }
       });
       setParticipants(map);
+
+      // Clean up ghost cursors of participants no longer present in room
+      setCursors((prev) => {
+        let changed = false;
+        const next: Record<string, CursorPosition> = {};
+        for (const [uid, cur] of Object.entries(prev) as [string, CursorPosition][]) {
+          if (uid === 'self' || activeIds.has(uid)) {
+            next[uid] = cur;
+          } else {
+            changed = true;
+          }
+        }
+        return changed ? next : prev;
+      });
     });
 
     socket.on('room:userJoined', (p: Participant) => {
       if (p?.id) {
         setParticipants((prev) => ({ ...prev, [p.id]: p }));
+        // Clean up any stale cursor previously associated with this user's name
+        setCursors((prev) => {
+          const next = { ...prev };
+          for (const [uid, cur] of Object.entries(next) as [string, CursorPosition][]) {
+            if (uid !== p.id && uid !== 'self' && cur?.userName === p.name) {
+              delete next[uid];
+            }
+          }
+          return next;
+        });
         showToast(`${p.name} (${p.role === 'tutor' ? 'Преподаватель' : 'Ученик'}) присоединился к уроку`);
       }
     });
@@ -460,6 +499,18 @@ export default function App() {
         delete next[userId];
         return next;
       });
+      setCursors((prev) => {
+        const next = { ...prev };
+        delete next[userId];
+        if (leftName) {
+          for (const [id, cur] of Object.entries(next) as [string, CursorPosition][]) {
+            if (cur?.userName === leftName) {
+              delete next[id];
+            }
+          }
+        }
+        return next;
+      });
       if (leftName) {
         showToast(`${leftName} покинул занятие`);
       }
@@ -467,6 +518,17 @@ export default function App() {
 
     socket.on('room:userLeft', handleUserLeave);
     socket.on('participant:left', handleUserLeave);
+
+    const handleCursorRemoved = ({ userId }: { userId: string }) => {
+      if (!userId) return;
+      setCursors((prev) => {
+        if (!prev[userId]) return prev;
+        const next = { ...prev };
+        delete next[userId];
+        return next;
+      });
+    };
+    socket.on('cursor:removed', handleCursorRemoved);
 
     socket.on('participant:voice:updated', ({ userId, micMuted, isSpeaking }: { userId: string; micMuted: boolean; isSpeaking: boolean }) => {
       setParticipants((prev) => {
@@ -574,14 +636,20 @@ export default function App() {
     socket.on('board:lock:changed', handleLockUpdate);
 
     // Ephemeral multiplayer sockets
-    socket.on('cursor:moved', ({ userId, x, y, userName: cName, userColor: cColor, pageIndex: cPage }) => {
+    socket.on('cursor:moved', (data: any) => {
+      const cUserId = data.userId;
+      if (!cUserId) return;
       setCursors((prev) => ({
         ...prev,
-        [userId]: {
-          x,
-          y,
-          userName: cName,
-          userColor: cColor,
+        [cUserId]: {
+          userId: cUserId,
+          x: data.x,
+          y: data.y,
+          userName: data.userName || 'Пользователь',
+          userColor: data.color || data.userColor || '#2563EB',
+          color: data.color || data.userColor || '#2563EB',
+          role: data.role || data.userRole || 'student',
+          avatar: data.avatar || data.userAvatar || '🎓',
           lastActive: Date.now(),
         },
       }));
@@ -672,6 +740,29 @@ export default function App() {
       window.removeEventListener('offline', handleOffline);
     };
   }, [isInRoom, roomId]);
+
+  // Periodic cleanup for stale/ghost cursors (disconnect without explicit leave)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      setCursors((prev) => {
+        let changed = false;
+        const next: Record<string, CursorPosition> = {};
+        for (const [uid, cur] of Object.entries(prev) as [string, CursorPosition][]) {
+          if (uid === 'self') {
+            next[uid] = cur;
+          } else if (cur?.lastActive && now - cur.lastActive > 4000) {
+            changed = true; // Inactive / dropped user cursor cleaned up
+          } else {
+            next[uid] = cur;
+          }
+        }
+        return changed ? next : prev;
+      });
+    }, 1500);
+
+    return () => clearInterval(interval);
+  }, []);
 
   const handleManualReconnect = () => {
     setIsReconnecting(true);

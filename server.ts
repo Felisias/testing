@@ -1553,6 +1553,9 @@ async function startServer() {
         userId: targetSocketId,
         userName: target?.name || targetName,
       });
+      io.to(currentRoomId).emit('cursor:removed', {
+        userId: targetSocketId,
+      });
       io.to(currentRoomId).emit('room:participants', Object.values(room.participants));
       io.to(currentRoomId).emit('chat:message', kickMsg);
     });
@@ -1580,6 +1583,9 @@ async function startServer() {
         io.to(currentRoomId).emit('room:userLeft', {
           userId: socket.id,
           userName: currentUser.name,
+        });
+        io.to(currentRoomId).emit('cursor:removed', {
+          userId: socket.id,
         });
         io.to(currentRoomId).emit('room:participants', Object.values(room.participants));
         io.to(currentRoomId).emit('chat:message', leaveMsg);
