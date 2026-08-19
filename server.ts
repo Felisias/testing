@@ -129,14 +129,34 @@ const rooms: { [roomId: string]: RoomData } = {};
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'tutorboard_storage.json');
+const BACKUP_FILE = path.join(DATA_DIR, 'tutorboard_storage.bak.json');
+const TEMP_FILE = path.join(DATA_DIR, 'tutorboard_storage.tmp');
 
 function loadDataFromDisk() {
   try {
     if (!fs.existsSync(DATA_DIR)) {
       fs.mkdirSync(DATA_DIR, { recursive: true });
     }
+
+    let raw: string | null = null;
     if (fs.existsSync(DATA_FILE)) {
-      const raw = fs.readFileSync(DATA_FILE, 'utf8');
+      try {
+        raw = fs.readFileSync(DATA_FILE, 'utf8');
+      } catch (err) {
+        console.warn('[Storage] Error reading DATA_FILE, attempting backup:', err);
+      }
+    }
+
+    if (!raw && fs.existsSync(BACKUP_FILE)) {
+      try {
+        raw = fs.readFileSync(BACKUP_FILE, 'utf8');
+        console.log('[Storage] Recovered storage from backup file');
+      } catch (err) {
+        console.warn('[Storage] Error reading BACKUP_FILE:', err);
+      }
+    }
+
+    if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed.users && typeof parsed.users === 'object') {
         Object.assign(users, parsed.users);
@@ -146,15 +166,66 @@ function loadDataFromDisk() {
       }
       if (parsed.rooms && typeof parsed.rooms === 'object') {
         Object.entries(parsed.rooms).forEach(([rId, rData]: [string, any]) => {
-          // Reset runtime socket participants on boot
-          rData.participants = {};
-          rooms[rId] = rData;
+          if (rData && typeof rData === 'object') {
+            // Reset runtime socket participants on boot
+            rData.participants = {};
+            rData.cursors = {};
+            rooms[rId] = rData;
+          }
         });
       }
-      console.log(`[Storage] Loaded ${Object.keys(rooms).length} rooms and ${Object.keys(users).length} users from disk`);
+      console.log(
+        `[Storage] Loaded ${Object.keys(rooms).length} rooms, ${Object.keys(users).length} users, and ${
+          Object.keys(inviteCodes).length
+        } invite codes from disk`
+      );
     }
   } catch (e) {
     console.warn('[Storage] Could not load data from disk:', e);
+  }
+}
+
+function saveDataSync() {
+  if (saveTimer) {
+    clearTimeout(saveTimer);
+    saveTimer = null;
+  }
+  try {
+    if (!fs.existsSync(DATA_DIR)) {
+      fs.mkdirSync(DATA_DIR, { recursive: true });
+    }
+
+    // Prepare rooms without runtime socket participants or live cursors
+    const roomsToPersist: Record<string, any> = {};
+    for (const [rId, rData] of Object.entries(rooms)) {
+      roomsToPersist[rId] = {
+        ...rData,
+        participants: {},
+        cursors: {},
+      };
+    }
+
+    const dataToSave = {
+      version: 1,
+      savedAt: Date.now(),
+      users,
+      inviteCodes,
+      rooms: roomsToPersist,
+    };
+
+    const serialized = JSON.stringify(dataToSave, null, 2);
+    fs.writeFileSync(TEMP_FILE, serialized, 'utf8');
+
+    // Backup existing before replace
+    if (fs.existsSync(DATA_FILE)) {
+      try {
+        fs.copyFileSync(DATA_FILE, BACKUP_FILE);
+      } catch {}
+    }
+
+    fs.renameSync(TEMP_FILE, DATA_FILE);
+  } catch (e) {
+    console.warn('[Storage] Error during synchronous disk save:', e);
   }
 }
 
@@ -163,23 +234,26 @@ function scheduleSave() {
   if (saveTimer) return;
   saveTimer = setTimeout(() => {
     saveTimer = null;
-    try {
-      if (!fs.existsSync(DATA_DIR)) {
-        fs.mkdirSync(DATA_DIR, { recursive: true });
-      }
-      const dataToSave = {
-        users,
-        inviteCodes,
-        rooms,
-      };
-      fs.writeFileSync(DATA_FILE, JSON.stringify(dataToSave, null, 2), 'utf8');
-    } catch (e) {
-      console.warn('[Storage] Could not save data to disk:', e);
-    }
-  }, 1000);
+    saveDataSync();
+  }, 250); // Fast 250ms debounce for live drawing and chat
 }
 
-// Load persisted data immediately
+// Graceful shutdown hooks to ensure all data is flushed to disk
+process.on('SIGINT', () => {
+  saveDataSync();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  saveDataSync();
+  process.exit(0);
+});
+
+process.on('beforeExit', () => {
+  saveDataSync();
+});
+
+// Load persisted data immediately on module evaluation
 loadDataFromDisk();
 
 function normalizeRoomId(rawId: string): string {
@@ -239,8 +313,18 @@ function getOrCreateRoom(roomId: string, title?: string, subject?: string): Room
   const normalizedId = normalizeRoomId(roomId) || 'ROOM-1000';
   const existing = findRoom(normalizedId);
   if (existing) {
-    if (title && !existing.title) existing.title = title;
-    if (subject && !existing.subject) existing.subject = subject;
+    let changed = false;
+    if (title && !existing.title) {
+      existing.title = title;
+      changed = true;
+    }
+    if (subject && !existing.subject) {
+      existing.subject = subject;
+      changed = true;
+    }
+    if (changed) {
+      saveDataSync();
+    }
     return existing;
   }
 
@@ -272,10 +356,11 @@ function getOrCreateRoom(roomId: string, title?: string, subject?: string): Room
       },
     ],
   };
+  saveDataSync();
   return rooms[normalizedId];
 }
 
-// Pre-seed demo boards
+// Pre-seed demo boards if not already existing
 getOrCreateRoom('MATH-2026', 'Подготовка к экзамену', 'Математика');
 
 async function startServer() {
@@ -322,6 +407,7 @@ async function startServer() {
     };
 
     users[cleanUsername] = newUser;
+    saveDataSync();
 
     return res.json({
       success: true,
@@ -375,6 +461,7 @@ async function startServer() {
 
     if (name) user.name = String(name).trim();
     if (avatar) user.avatar = String(avatar);
+    saveDataSync();
 
     return res.json({
       success: true,
@@ -426,6 +513,7 @@ async function startServer() {
 
     // Limit to 50 saved boards
     user.savedBoards = user.savedBoards.slice(0, 50);
+    saveDataSync();
 
     return res.json({ success: true, savedBoards: user.savedBoards });
   });
@@ -708,6 +796,7 @@ async function startServer() {
     targetUser.savedBoards = (targetUser.savedBoards || []).filter(
       (b) => normalizeRoomId(b.id) !== normRoomId
     );
+    saveDataSync();
 
     // If target user is actively in this room on socket, notify and kick them
     const room = findRoom(normRoomId);
@@ -748,7 +837,7 @@ async function startServer() {
     };
 
     inviteCodes[code] = record;
-    scheduleSave();
+    saveDataSync();
     return res.json({ success: true, inviteCode: record });
   });
 
@@ -814,7 +903,7 @@ async function startServer() {
           } else {
             u.savedBoards.unshift(entry);
           }
-          scheduleSave();
+          saveDataSync();
         }
 
         return res.json({
@@ -864,7 +953,7 @@ async function startServer() {
       }
     }
 
-    scheduleSave();
+    saveDataSync();
 
     return res.json({
       success: true,
@@ -1175,6 +1264,7 @@ async function startServer() {
       }
       room.isTimerRunning = true;
       room.timerUpdatedAt = Date.now();
+      scheduleSave();
 
       io.to(currentRoomId).emit('timer:synced', {
         timerSeconds: room.timerSeconds,
@@ -1195,6 +1285,7 @@ async function startServer() {
       }
       room.isTimerRunning = false;
       room.timerUpdatedAt = Date.now();
+      scheduleSave();
 
       io.to(currentRoomId).emit('timer:synced', {
         timerSeconds: room.timerSeconds,
@@ -1213,6 +1304,7 @@ async function startServer() {
       room.timerSeconds = data?.timerSeconds ?? 45 * 60;
       room.isTimerRunning = false;
       room.timerUpdatedAt = Date.now();
+      scheduleSave();
 
       io.to(currentRoomId).emit('timer:synced', {
         timerSeconds: room.timerSeconds,
@@ -1231,6 +1323,7 @@ async function startServer() {
       const sec = timerSeconds ?? seconds ?? 45 * 60;
       room.timerSeconds = sec;
       room.timerUpdatedAt = Date.now();
+      scheduleSave();
 
       io.to(currentRoomId).emit('timer:synced', {
         timerSeconds: room.timerSeconds,
@@ -1527,6 +1620,7 @@ async function startServer() {
       if (room.chatMessages.length > 100) {
         room.chatMessages = room.chatMessages.slice(-100);
       }
+      scheduleSave();
 
       io.to(currentRoomId).emit('chat:message', msg);
     });
