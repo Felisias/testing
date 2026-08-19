@@ -1826,6 +1826,46 @@ async function startServer() {
       io.to(currentRoomId).emit('chat:message', kickMsg);
     });
 
+    // ================= IDE Collaborative Real-time Events =================
+    socket.on('ide:code:change', (data: { fileId: string; content: string; senderId: string; version?: number }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      socket.to(currentRoomId).emit('ide:code:sync', {
+        fileId: data.fileId,
+        content: data.content,
+        senderId: socket.id,
+        version: data.version,
+      });
+    });
+
+    socket.on('ide:cursor:move', (data: any) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      socket.to(currentRoomId).emit('ide:cursor:sync', {
+        ...data,
+        userId: socket.id,
+        userName: currentUser?.name || data.userName,
+        color: currentUser?.color || data.color,
+        avatar: currentUser?.avatar || data.avatar,
+      });
+    });
+
+    socket.on('ide:file:create', (data: { file: any }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      socket.to(currentRoomId).emit('ide:file:created', { file: data.file });
+    });
+
+    socket.on('ide:file:delete', (data: { fileId: string }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      socket.to(currentRoomId).emit('ide:file:deleted', { fileId: data.fileId });
+    });
+
+    socket.on('ide:output:sync', (data: { output: string; senderName?: string }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      socket.to(currentRoomId).emit('ide:output:sync', {
+        output: data.output,
+        senderName: currentUser?.name || data.senderName,
+      });
+    });
+
     // Disconnect handler
     socket.on('disconnect', () => {
       if (currentRoomId && rooms[currentRoomId] && currentUser) {

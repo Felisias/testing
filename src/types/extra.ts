@@ -39,12 +39,23 @@ export interface CodeFile {
   content: string;
 }
 
+export interface CodeSelection {
+  startLine: number;
+  startCol: number;
+  endLine: number;
+  endCol: number;
+  selectionStart: number;
+  selectionEnd: number;
+}
+
 export interface CodeCursor {
   userId: string;
   userName: string;
   color: string;
   avatar?: string;
+  fileId?: string;
   lineNumber: number;
   column: number;
+  selection?: CodeSelection | null;
   lastActive?: number;
 }

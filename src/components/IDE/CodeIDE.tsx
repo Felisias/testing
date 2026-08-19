@@ -12,10 +12,12 @@ import 'prismjs/components/prism-json';
 import 'prismjs/components/prism-bash';
 
 import { getSocket } from '../../services/socket';
-import { CodeFile, CodeCursor } from '../../types/extra';
+import { CodeFile, CodeCursor, CodeSelection } from '../../types/extra';
 import { Participant } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { voiceManager } from '../../services/webrtc';
+import { getSuggestions, cleanInsertText, CodeSuggestion } from './codeSuggestions';
+import { AutocompletePopup } from './AutocompletePopup';
 import {
   Code2,
   Play,
@@ -79,6 +81,77 @@ const LANGUAGE_EXTENSIONS: Record<string, string> = {
 const LINE_HEIGHT = 24; // Exact px line-height
 const PADDING_TOP = 12; // Textarea padding-top in px
 const PADDING_LEFT = 12; // Textarea padding-left in px
+
+const DISTINCT_COLORS = [
+  '#f43f5e', // rose
+  '#06b6d4', // cyan
+  '#10b981', // emerald
+  '#8b5cf6', // violet
+  '#f59e0b', // amber
+  '#ec4899', // pink
+  '#3b82f6', // blue
+  '#14b8a6', // teal
+  '#e11d48', // crimson
+  '#a855f7', // purple
+];
+
+function getDistinctRemoteColor(remoteColor?: string, localColor?: string, userId?: string): string {
+  if (remoteColor && remoteColor.toLowerCase() !== (localColor || '').toLowerCase()) {
+    return remoteColor;
+  }
+  let hash = 0;
+  for (let i = 0; i < (userId || 'user').length; i++) {
+    hash = ((hash << 5) - hash) + (userId || 'user').charCodeAt(i);
+  }
+  const filtered = DISTINCT_COLORS.filter(c => c.toLowerCase() !== (localColor || '').toLowerCase());
+  return filtered[Math.abs(hash) % filtered.length] || '#3b82f6';
+}
+
+interface SelectionBox {
+  top: number;
+  left: number;
+  width: number;
+  height: number;
+}
+
+function calculateSelectionBoxes(
+  selection: { startLine: number; startCol: number; endLine: number; endCol: number },
+  content: string,
+  charWidth: number,
+  scrollPos: { top: number; left: number }
+): SelectionBox[] {
+  const boxes: SelectionBox[] = [];
+  const lines = content.split('\n');
+  const { startLine, startCol, endLine, endCol } = selection;
+
+  if (startLine === endLine) {
+    const top = (startLine - 1) * LINE_HEIGHT + PADDING_TOP - scrollPos.top;
+    const left = (startCol - 1) * charWidth + PADDING_LEFT - scrollPos.left;
+    const width = Math.max(charWidth, (endCol - startCol) * charWidth);
+    boxes.push({ top, left, width, height: LINE_HEIGHT });
+  } else {
+    for (let l = startLine; l <= endLine; l++) {
+      const top = (l - 1) * LINE_HEIGHT + PADDING_TOP - scrollPos.top;
+      const lineLen = (lines[l - 1] || '').length + 1;
+
+      if (l === startLine) {
+        const left = (startCol - 1) * charWidth + PADDING_LEFT - scrollPos.left;
+        const width = Math.max(charWidth, (lineLen - startCol + 1) * charWidth);
+        boxes.push({ top, left, width, height: LINE_HEIGHT });
+      } else if (l === endLine) {
+        const left = PADDING_LEFT - scrollPos.left;
+        const width = Math.max(charWidth, (endCol - 1) * charWidth);
+        boxes.push({ top, left, width, height: LINE_HEIGHT });
+      } else {
+        const left = PADDING_LEFT - scrollPos.left;
+        const width = Math.max(charWidth * 2, lineLen * charWidth);
+        boxes.push({ top, left, width, height: LINE_HEIGHT });
+      }
+    }
+  }
+
+  return boxes;
+}
 
 function getPrismLanguage(lang: string): string {
   const map: Record<string, string> = {
@@ -486,15 +559,117 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     }
   };
 
+  // Autocomplete state
+  const [autocomplete, setAutocomplete] = useState<{
+    suggestions: CodeSuggestion[];
+    selectedIndex: number;
+    position: { top: number; left: number };
+    prefix: string;
+    wordStart: number;
+  } | null>(null);
+
+  // Update suggestions dynamically based on current cursor
+  const updateAutocomplete = (code: string, cursorIndex: number, language: string) => {
+    const result = getSuggestions(code, cursorIndex, language);
+    if (!result || result.suggestions.length === 0) {
+      setAutocomplete(null);
+      return;
+    }
+
+    const textBefore = code.substring(0, cursorIndex);
+    const lines = textBefore.split('\n');
+    const curLine = lines.length;
+    const curCol = lines[lines.length - 1].length + 1;
+
+    const top = curLine * LINE_HEIGHT + PADDING_TOP - scrollPos.top + 4;
+    const left = Math.max(PADDING_LEFT, (curCol - 1) * charWidth + PADDING_LEFT - scrollPos.left);
+
+    setAutocomplete((prev) => ({
+      suggestions: result.suggestions,
+      selectedIndex:
+        prev && prev.prefix === result.prefix
+          ? Math.min(prev.selectedIndex, result.suggestions.length - 1)
+          : 0,
+      position: { top, left },
+      prefix: result.prefix,
+      wordStart: result.wordStart,
+    }));
+  };
+
+  // Insert selected autocomplete suggestion
+  const handleSelectSuggestion = (item: CodeSuggestion) => {
+    if (!textareaRef.current || !activeFile || !autocomplete) return;
+    const el = textareaRef.current;
+    const val = el.value;
+    const wordStart = autocomplete.wordStart;
+    const cursorIndex = el.selectionStart;
+
+    const inserted = cleanInsertText(item.insertText);
+    const nextVal = val.substring(0, wordStart) + inserted + val.substring(cursorIndex);
+
+    handleContentChange(nextVal);
+    setAutocomplete(null);
+
+    setTimeout(() => {
+      if (textareaRef.current) {
+        const newPos = wordStart + inserted.length;
+        textareaRef.current.focus();
+        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newPos;
+        broadcastCursorPosition();
+      }
+    }, 0);
+  };
+
   // Socket listeners for real-time code changes, file creation/deletion, cursors and terminal output
   useEffect(() => {
     const socket = getSocket();
 
     const handleCodeSync = (data: { fileId: string; content: string; senderId: string }) => {
       if (data.senderId === myUserId) return;
+
       setFiles((prev) =>
         prev.map((f) => (f.id === data.fileId ? { ...f, content: data.content } : f))
       );
+
+      // Concurrent typing safeguard: maintain active user's cursor position smoothly
+      if (data.fileId === activeFileId && textareaRef.current) {
+        const el = textareaRef.current;
+        const isFocused = document.activeElement === el;
+        const curStart = el.selectionStart;
+        const curEnd = el.selectionEnd;
+        const oldText = el.value;
+        const newText = data.content;
+
+        if (isFocused && oldText !== newText) {
+          let prefixLen = 0;
+          while (
+            prefixLen < oldText.length &&
+            prefixLen < newText.length &&
+            oldText[prefixLen] === newText[prefixLen]
+          ) {
+            prefixLen++;
+          }
+
+          const diff = newText.length - oldText.length;
+          let newStart = curStart;
+          let newEnd = curEnd;
+
+          if (curStart > prefixLen) {
+            newStart = Math.max(prefixLen, curStart + diff);
+          }
+          if (curEnd > prefixLen) {
+            newEnd = Math.max(prefixLen, curEnd + diff);
+          }
+
+          requestAnimationFrame(() => {
+            if (textareaRef.current) {
+              textareaRef.current.selectionStart = Math.min(newText.length, Math.max(0, newStart));
+              textareaRef.current.selectionEnd = Math.min(newText.length, Math.max(0, newEnd));
+            }
+          });
+        }
+      }
+
       setOtherCursors((prev) => {
         if (!prev[data.senderId]) return prev;
         return {
@@ -567,30 +742,118 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       content: newContent,
       senderId: myUserId,
     });
+
+    if (textareaRef.current) {
+      updateAutocomplete(newContent, textareaRef.current.selectionStart, activeFile.language);
+    }
   };
 
-  // Broadcast local cursor position with line and column
+  // Broadcast local cursor position with line, column, and selection range
   const broadcastCursorPosition = () => {
     if (!textareaRef.current || !activeFile) return;
     const el = textareaRef.current;
     const selStart = el.selectionStart;
-    const textBefore = el.value.substring(0, selStart);
-    const lines = textBefore.split('\n');
-    const lineNumber = lines.length;
-    const column = lines[lines.length - 1].length + 1;
+    const selEnd = el.selectionEnd;
+    const val = el.value;
+
+    const textBeforeStart = val.substring(0, selStart);
+    const startLines = textBeforeStart.split('\n');
+    const lineNumber = startLines.length;
+    const column = startLines[startLines.length - 1].length + 1;
+
+    let selection: CodeSelection | null = null;
+    if (selStart !== selEnd) {
+      const minSel = Math.min(selStart, selEnd);
+      const maxSel = Math.max(selStart, selEnd);
+      const textMin = val.substring(0, minSel);
+      const textMax = val.substring(0, maxSel);
+      const minLines = textMin.split('\n');
+      const maxLines = textMax.split('\n');
+
+      selection = {
+        startLine: minLines.length,
+        startCol: minLines[minLines.length - 1].length + 1,
+        endLine: maxLines.length,
+        endCol: maxLines[maxLines.length - 1].length + 1,
+        selectionStart: minSel,
+        selectionEnd: maxSel,
+      };
+    }
 
     getSocket().emit('ide:cursor:move', {
       userId: myUserId,
       userName,
       color: userColor,
       avatar: userAvatar,
+      fileId: activeFile.id,
       lineNumber,
       column,
+      selection,
     });
+
+    // Check autocomplete suggestions
+    updateAutocomplete(val, selStart, activeFile.language);
   };
 
-  // Tab key handling for code indentation
+  // Keyboard navigation for Autocomplete and Tab indentation
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // 1. If autocomplete popup is active, capture Arrow navigation, Tab/Enter selection, and Esc
+    if (autocomplete && autocomplete.suggestions.length > 0) {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        setAutocomplete((prev) =>
+          prev
+            ? {
+                ...prev,
+                selectedIndex: (prev.selectedIndex + 1) % prev.suggestions.length,
+              }
+            : null
+        );
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        setAutocomplete((prev) =>
+          prev
+            ? {
+                ...prev,
+                selectedIndex:
+                  (prev.selectedIndex - 1 + prev.suggestions.length) % prev.suggestions.length,
+              }
+            : null
+        );
+        return;
+      }
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        e.preventDefault();
+        const selected =
+          autocomplete.suggestions[autocomplete.selectedIndex] || autocomplete.suggestions[0];
+        if (selected) {
+          handleSelectSuggestion(selected);
+          return;
+        }
+      }
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        setAutocomplete(null);
+        return;
+      }
+    }
+
+    // 2. Ctrl+Space manual trigger for autocomplete
+    if ((e.ctrlKey || e.metaKey) && e.key === ' ') {
+      e.preventDefault();
+      if (textareaRef.current && activeFile) {
+        updateAutocomplete(
+          textareaRef.current.value,
+          textareaRef.current.selectionStart,
+          activeFile.language
+        );
+      }
+      return;
+    }
+
+    // 3. Tab indentation handling
     if (e.key === 'Tab') {
       e.preventDefault();
       const el = e.currentTarget;
@@ -1015,44 +1278,86 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                 }}
               />
 
-              {/* Pixel-Accurate Remote Cursors Overlay with Collaborator Avatars */}
+              {/* Remote Selections Overlay */}
               {(Object.values(otherCursors) as CodeCursor[]).map((c) => {
+                if (c.fileId && c.fileId !== activeFile?.id) return null;
+                if (!c.selection) return null;
+
+                const color = getDistinctRemoteColor(c.color, userColor, c.userId);
+                const boxes = calculateSelectionBoxes(
+                  c.selection,
+                  activeFile?.content || '',
+                  charWidth,
+                  scrollPos
+                );
+
+                return (
+                  <React.Fragment key={`sel-${c.userId}`}>
+                    {boxes.map((box, bIdx) => (
+                      <div
+                        key={`sel-${c.userId}-${bIdx}`}
+                        className="absolute pointer-events-none transition-all duration-75 z-15 rounded-xs"
+                        style={{
+                          top: `${box.top}px`,
+                          left: `${box.left}px`,
+                          width: `${box.width}px`,
+                          height: `${box.height}px`,
+                          backgroundColor: `${color}35`,
+                          border: `1px solid ${color}70`,
+                        }}
+                      />
+                    ))}
+                  </React.Fragment>
+                );
+              })}
+
+              {/* Pixel-Accurate Remote Cursors Overlay (Caret lines only, NO floating name labels, distinct colors) */}
+              {(Object.values(otherCursors) as CodeCursor[]).map((c) => {
+                if (c.fileId && c.fileId !== activeFile?.id) return null;
+
                 const topPos = (c.lineNumber - 1) * LINE_HEIGHT + PADDING_TOP - scrollPos.top;
                 const leftPos = (c.column - 1) * charWidth + PADDING_LEFT - scrollPos.left;
 
-                if (topPos < 0 || topPos > 1400 || leftPos < 0 || leftPos > 2600) {
+                if (topPos < -20 || topPos > 2000 || leftPos < -20 || leftPos > 4000) {
                   return null;
                 }
 
-                const isInactive = c.lastActive ? currentTime - c.lastActive > 3000 : false;
+                const isInactive = c.lastActive ? currentTime - c.lastActive > 4000 : false;
+                const color = getDistinctRemoteColor(c.color, userColor, c.userId);
 
                 return (
                   <div
-                    key={c.userId}
-                    className="absolute pointer-events-none transition-all duration-75 z-20"
+                    key={`cur-${c.userId}`}
+                    className={`absolute pointer-events-none transition-all duration-75 z-20 ${
+                      isInactive ? 'opacity-40' : 'opacity-100'
+                    }`}
                     style={{
                       top: `${topPos}px`,
                       left: `${leftPos}px`,
                     }}
                   >
-                    {/* Caret Line (solid stick - stays 100% opaque at all times) */}
+                    {/* Caret Line: Solid distinct-colored bar with subtle glow */}
                     <div
-                      className="w-[2px] h-[22px] rounded-xs"
-                      style={{ backgroundColor: c.color }}
+                      className="w-[2.5px] h-[22px] rounded-xs shadow-xs transition-colors duration-200"
+                      style={{
+                        backgroundColor: color,
+                        boxShadow: `0 0 6px ${color}80`,
+                      }}
                     />
-                    {/* User Label Flag with Avatar (compact, fades to semi-transparent after 3s of inactivity) */}
-                    <div
-                      className={`absolute -top-3.5 left-0 text-[9px] font-sans font-semibold text-white px-1 py-[1.5px] rounded-[3px] shadow-xs whitespace-nowrap flex items-center gap-0.5 transition-opacity duration-300 ${
-                        isInactive ? 'opacity-30' : 'opacity-100'
-                      }`}
-                      style={{ backgroundColor: c.color }}
-                    >
-                      <span className="text-[8.5px] leading-none">{c.avatar || '🎓'}</span>
-                      <span className="leading-none">{c.userName}</span>
-                    </div>
                   </div>
                 );
               })}
+
+              {/* Autocomplete / IntelliSense Suggestions Popup */}
+              {autocomplete && (
+                <AutocompletePopup
+                  suggestions={autocomplete.suggestions}
+                  selectedIndex={autocomplete.selectedIndex}
+                  onSelect={handleSelectSuggestion}
+                  position={autocomplete.position}
+                  prefix={autocomplete.prefix}
+                />
+              )}
             </div>
           </div>
 
