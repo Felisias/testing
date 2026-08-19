@@ -27,6 +27,12 @@ import {
   Copy,
   BookOpen,
   X,
+  Download,
+  Upload,
+  HardDrive,
+  FileJson,
+  Database,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface AuthModalProps {
@@ -94,8 +100,22 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
   const [isRefreshingStatuses, setIsRefreshingStatuses] = useState(false);
   const [copiedCardId, setCopiedCardId] = useState<string | null>(null);
 
-  // Active Dialog on Dashboard: null | 'join-code' | 'create-room'
-  const [activeDialog, setActiveDialog] = useState<'join-code' | 'create-room' | null>(null);
+  // Active Dialog on Dashboard: null | 'join-code' | 'create-room' | 'backup-import'
+  const [activeDialog, setActiveDialog] = useState<'join-code' | 'create-room' | 'backup-import' | null>(null);
+
+  // Backup & Restore State (Tutor only)
+  const [isExportingBackup, setIsExportingBackup] = useState(false);
+  const [isImportingBackup, setIsImportingBackup] = useState(false);
+  const [pendingBackupData, setPendingBackupData] = useState<{
+    filename: string;
+    sizeKb: number;
+    data: any;
+    roomsCount: number;
+    usersCount: number;
+    inviteCodesCount: number;
+  } | null>(null);
+  const [importMode, setImportMode] = useState<'merge' | 'replace'>('merge');
+  const backupFileInputRef = React.useRef<HTMLInputElement>(null);
 
   // Auth Modes (when not logged in): 'login' | 'register' | 'guest'
   const [authMode, setAuthMode] = useState<'login' | 'register' | 'guest'>('login');
@@ -272,6 +292,131 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
     try {
       localStorage.setItem(RECENT_ROOMS_KEY, JSON.stringify(filtered));
     } catch {}
+  };
+
+  // Export full backup JSON (Tutor only)
+  const handleExportBackup = async () => {
+    if (!currentUser || currentUser.role !== 'tutor') return;
+    setIsExportingBackup(true);
+    try {
+      const res = await fetch(`/api/admin/backup/export?username=${encodeURIComponent(currentUser.username)}`);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Ошибка при экспорте резервной копии');
+      }
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      const dateStr = new Date().toISOString().slice(0, 10);
+      a.href = url;
+      a.download = `tutorboard-full-backup-${dateStr}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showNotice('Файл полного сохранения (.json) успешно скачан!');
+    } catch (err: any) {
+      showNotice(err.message || 'Не удалось скачать резервную копию');
+    } finally {
+      setIsExportingBackup(false);
+    }
+  };
+
+  // Trigger file dialog
+  const handleTriggerImport = () => {
+    setAuthError(null);
+    backupFileInputRef.current?.click();
+  };
+
+  // Read selected JSON backup file
+  const handleBackupFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const text = event.target?.result as string;
+        const parsed = JSON.parse(text);
+        if (!parsed || typeof parsed !== 'object') {
+          throw new Error('Файл не содержит корректного JSON-объекта');
+        }
+
+        const rooms = parsed.rooms || {};
+        const users = parsed.users || {};
+        const inviteCodes = parsed.inviteCodes || {};
+
+        const roomsCount = Object.keys(rooms).length;
+        const usersCount = Object.keys(users).length;
+        const inviteCodesCount = Object.keys(inviteCodes).length;
+
+        if (roomsCount === 0 && usersCount === 0 && inviteCodesCount === 0) {
+          throw new Error('В выбранном файле нет сохраненных комнат или пользователей TutorBoard');
+        }
+
+        setPendingBackupData({
+          filename: file.name,
+          sizeKb: Math.max(1, Math.round(file.size / 1024)),
+          data: parsed,
+          roomsCount,
+          usersCount,
+          inviteCodesCount,
+        });
+        setImportMode('merge');
+        setActiveDialog('backup-import');
+      } catch (err: any) {
+        showNotice(err.message || 'Ошибка при чтении файла сохранения');
+      } finally {
+        if (backupFileInputRef.current) {
+          backupFileInputRef.current.value = '';
+        }
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // Send backup data to server for restore
+  const handleConfirmImportBackup = async () => {
+    if (!currentUser || !pendingBackupData) return;
+    setIsImportingBackup(true);
+    try {
+      const res = await fetch('/api/admin/backup/import', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          username: currentUser.username,
+          backupData: pendingBackupData.data,
+          mode: importMode,
+        }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Ошибка импорта сохранения');
+      }
+
+      if (data.savedBoards && Array.isArray(data.savedBoards)) {
+        setSavedBoards(data.savedBoards);
+        fetchRoomStatuses(data.savedBoards);
+      } else {
+        // Refresh boards
+        const bRes = await fetch(`/api/user/boards?username=${encodeURIComponent(currentUser.username)}`);
+        const bData = await bRes.json();
+        if (bData?.savedBoards) {
+          setSavedBoards(bData.savedBoards);
+          fetchRoomStatuses(bData.savedBoards);
+        }
+      }
+
+      showNotice(`✓ Сохранение загружено: ${data.stats.roomsCount} комнат, ${data.stats.usersCount} пользователей!`);
+      setActiveDialog(null);
+      setPendingBackupData(null);
+    } catch (err: any) {
+      showNotice(err.message || 'Не удалось применить файл сохранения');
+    } finally {
+      setIsImportingBackup(false);
+    }
   };
 
   // Handle Login
@@ -976,7 +1121,42 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
           </div>
 
           {/* Top Right: User Profile & Actions */}
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2 sm:gap-3">
+            {/* Hidden Backup File Input for Tutors */}
+            <input
+              type="file"
+              ref={backupFileInputRef}
+              onChange={handleBackupFileSelect}
+              accept=".json,application/json"
+              className="hidden"
+            />
+
+            {/* Tutors Backup Action Toolbar */}
+            {isTutor && (
+              <div className="hidden sm:flex items-center gap-1.5 p-1 bg-slate-100/80 border border-slate-200/80 rounded-2xl">
+                <button
+                  type="button"
+                  onClick={handleExportBackup}
+                  disabled={isExportingBackup}
+                  title="Скачать полный файл сохранения (.json)"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 hover:text-blue-700 bg-white hover:bg-blue-50 border border-slate-200/90 rounded-xl shadow-2xs transition cursor-pointer disabled:opacity-50"
+                >
+                  <Download className={`w-3.5 h-3.5 ${isExportingBackup ? 'animate-bounce text-blue-600' : 'text-slate-600'}`} />
+                  <span>Скачать бэкап</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleTriggerImport}
+                  title="Загрузить файл сохранения (.json)"
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-slate-700 hover:text-blue-700 bg-white hover:bg-blue-50 border border-slate-200/90 rounded-xl shadow-2xs transition cursor-pointer"
+                >
+                  <Upload className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Загрузить бэкап</span>
+                </button>
+              </div>
+            )}
+
             <div className="flex items-center gap-3 pl-3 pr-2 py-1.5 bg-slate-100/80 border border-slate-200/80 rounded-2xl">
               {/* Avatar with click-to-change */}
               <button
@@ -1191,7 +1371,7 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
         <section className="flex flex-col gap-4">
           <h2 className="text-sm font-bold text-slate-900 tracking-tight">Быстрые действия</h2>
 
-          <div className={`grid gap-5 ${isTutor ? 'grid-cols-1 md:grid-cols-2' : 'grid-cols-1 max-w-xl'}`}>
+          <div className={`grid gap-5 ${isTutor ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1 max-w-xl'}`}>
             {/* Action Card 1: Войти по коду (Visible to both Student & Tutor) */}
             <div
               onClick={() => {
@@ -1245,6 +1425,46 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                   <Sparkles className="w-3.5 h-3.5" />
                   <span>Создать</span>
                 </span>
+              </div>
+            )}
+
+            {/* Action Card 3: Резервное копирование и сохранение (Tutor only) */}
+            {isTutor && (
+              <div className="p-6 bg-white border border-slate-200/90 rounded-3xl transition-all duration-200 shadow-2xs flex flex-col justify-between gap-4">
+                <div className="flex items-start gap-4">
+                  <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-700 flex items-center justify-center shrink-0">
+                    <Database className="w-6 h-6" />
+                  </div>
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900">
+                      Резервная копия данных
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5 leading-relaxed">
+                      Экспорт и импорт всех комнат, досок, учеников и ключей в единый .json файл
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                  <button
+                    type="button"
+                    onClick={handleExportBackup}
+                    disabled={isExportingBackup}
+                    className="flex-1 py-2 px-3 bg-slate-100 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200 hover:border-blue-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Download className={`w-3.5 h-3.5 ${isExportingBackup ? 'animate-bounce text-blue-600' : ''}`} />
+                    <span>Скачать .json</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={handleTriggerImport}
+                    className="flex-1 py-2 px-3 bg-slate-100 hover:bg-emerald-50 text-slate-700 hover:text-emerald-800 border border-slate-200 hover:border-emerald-200 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
+                  >
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Загрузить .json</span>
+                  </button>
+                </div>
               </div>
             )}
           </div>
@@ -1455,6 +1675,158 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
                 <ArrowRight className="w-4 h-4" />
               </button>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* ===================== MODAL 3: ИМПОРТ СОХРАНЕНИЯ (TUTOR ONLY) ===================== */}
+      {activeDialog === 'backup-import' && pendingBackupData && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="w-full max-w-[480px] bg-white rounded-3xl border border-slate-200 shadow-2xl overflow-hidden animate-in zoom-in-95 duration-150">
+            {/* Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-xl bg-emerald-50 text-emerald-700 flex items-center justify-center">
+                  <Database className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900">Загрузка сохранения</h3>
+                  <p className="text-[11px] text-slate-500">Восстановление данных из .json файла</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setActiveDialog(null);
+                  setPendingBackupData(null);
+                }}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-xl hover:bg-slate-100 transition cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="p-6 flex flex-col gap-4">
+              {/* File details card */}
+              <div className="p-4 bg-slate-50 border border-slate-200/80 rounded-2xl flex flex-col gap-2.5">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2 text-xs font-bold text-slate-800 truncate">
+                    <FileJson className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="truncate max-w-[240px]">{pendingBackupData.filename}</span>
+                  </div>
+                  <span className="text-[10px] text-slate-500 font-mono">
+                    {pendingBackupData.sizeKb} КБ
+                  </span>
+                </div>
+
+                <div className="flex flex-wrap gap-2 pt-1 border-t border-slate-200/60">
+                  <span className="px-2.5 py-1 bg-white border border-slate-200 text-slate-700 rounded-lg text-[10px] font-bold">
+                    🏛 {pendingBackupData.roomsCount} комнат
+                  </span>
+                  <span className="px-2.5 py-1 bg-white border border-slate-200 text-slate-700 rounded-lg text-[10px] font-bold">
+                    👥 {pendingBackupData.usersCount} пользователей
+                  </span>
+                  {pendingBackupData.inviteCodesCount > 0 && (
+                    <span className="px-2.5 py-1 bg-white border border-slate-200 text-slate-700 rounded-lg text-[10px] font-bold">
+                      🔑 {pendingBackupData.inviteCodesCount} ключей
+                    </span>
+                  )}
+                </div>
+              </div>
+
+              {/* Mode choice */}
+              <div className="flex flex-col gap-2">
+                <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  Режим восстановления:
+                </label>
+
+                <div className="grid grid-cols-1 gap-2">
+                  <div
+                    onClick={() => setImportMode('merge')}
+                    className={`p-3 rounded-2xl border transition cursor-pointer flex items-start gap-3 ${
+                      importMode === 'merge'
+                        ? 'bg-blue-50/70 border-blue-400 ring-1 ring-blue-400'
+                        : 'bg-white border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="importMode"
+                      checked={importMode === 'merge'}
+                      onChange={() => setImportMode('merge')}
+                      className="mt-0.5 text-blue-600 focus:ring-blue-500"
+                    />
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">
+                        Объединить с текущими данными (Рекомендуется)
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Добавит новые комнаты и пользователей, обновит совпадающие, сохранив текущие активные сессии.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => setImportMode('replace')}
+                    className={`p-3 rounded-2xl border transition cursor-pointer flex items-start gap-3 ${
+                      importMode === 'replace'
+                        ? 'bg-amber-50/70 border-amber-400 ring-1 ring-amber-400'
+                        : 'bg-white border-slate-200 hover:bg-slate-50'
+                    }`}
+                  >
+                    <input
+                      type="radio"
+                      name="importMode"
+                      checked={importMode === 'replace'}
+                      onChange={() => setImportMode('replace')}
+                      className="mt-0.5 text-amber-600 focus:ring-amber-500"
+                    />
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">
+                        Полная замена (Перезаписать)
+                      </h4>
+                      <p className="text-[11px] text-slate-500 mt-0.5">
+                        Сотрет текущую базу данных комнат и ключей и полностью заменит данными из файла.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActiveDialog(null);
+                    setPendingBackupData(null);
+                  }}
+                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition cursor-pointer"
+                >
+                  Отмена
+                </button>
+
+                <button
+                  type="button"
+                  onClick={handleConfirmImportBackup}
+                  disabled={isImportingBackup}
+                  className="flex-1 py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold rounded-xl shadow-sm shadow-emerald-600/20 transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {isImportingBackup ? (
+                    <>
+                      <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+                      <span>Применение...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Применить сохранение</span>
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}

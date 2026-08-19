@@ -783,6 +783,124 @@ async function startServer() {
     return res.json({ users: userList });
   });
 
+  // ================= Full System Backup & Restore (Tutor Only) =================
+  // Export full backup JSON
+  app.get('/api/admin/backup/export', (req, res) => {
+    const username = String(req.query.username || '').trim().toLowerCase();
+    const user = users[username];
+
+    if (!user || user.role !== 'tutor') {
+      return res.status(403).json({ error: 'Экспорт сохранения доступен только преподавателю' });
+    }
+
+    const roomsToExport: Record<string, any> = {};
+    for (const [rId, rData] of Object.entries(rooms)) {
+      roomsToExport[rId] = {
+        ...rData,
+        participants: {},
+        cursors: {},
+      };
+    }
+
+    const backupData = {
+      app: 'TutorBoard',
+      version: 1,
+      exportedAt: Date.now(),
+      exportedBy: user.username,
+      exportedByName: user.name,
+      stats: {
+        roomsCount: Object.keys(roomsToExport).length,
+        usersCount: Object.keys(users).length,
+        inviteCodesCount: Object.keys(inviteCodes).length,
+      },
+      users,
+      rooms: roomsToExport,
+      inviteCodes,
+    };
+
+    const dateStr = new Date().toISOString().slice(0, 10);
+    res.setHeader('Content-Type', 'application/json; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="tutorboard-backup-${dateStr}.json"`);
+    return res.json(backupData);
+  });
+
+  // Import full backup JSON
+  app.post('/api/admin/backup/import', (req, res) => {
+    const { username, backupData, mode } = req.body;
+    const cleanUsername = String(username || '').trim().toLowerCase();
+    const user = users[cleanUsername];
+
+    if (!user || user.role !== 'tutor') {
+      return res.status(403).json({ error: 'Импорт сохранения доступен только преподавателю' });
+    }
+
+    if (!backupData || typeof backupData !== 'object') {
+      return res.status(400).json({ error: 'Некорректный или пустой файл сохранения' });
+    }
+
+    const importedUsers = backupData.users || {};
+    const importedRooms = backupData.rooms || {};
+    const importedInviteCodes = backupData.inviteCodes || {};
+
+    if (
+      typeof importedUsers !== 'object' &&
+      typeof importedRooms !== 'object' &&
+      typeof importedInviteCodes !== 'object'
+    ) {
+      return res.status(400).json({ error: 'Файл не содержит структуры данных TutorBoard' });
+    }
+
+    // Replace or Merge
+    if (mode === 'replace') {
+      for (const k of Object.keys(users)) delete users[k];
+      for (const k of Object.keys(rooms)) delete rooms[k];
+      for (const k of Object.keys(inviteCodes)) delete inviteCodes[k];
+    }
+
+    // Merge users
+    if (importedUsers && typeof importedUsers === 'object') {
+      Object.assign(users, importedUsers);
+    }
+    // Make sure the active tutor user is preserved
+    if (!users[cleanUsername]) {
+      users[cleanUsername] = user;
+    }
+
+    // Merge invite codes
+    if (importedInviteCodes && typeof importedInviteCodes === 'object') {
+      Object.assign(inviteCodes, importedInviteCodes);
+    }
+
+    // Merge rooms
+    if (importedRooms && typeof importedRooms === 'object') {
+      Object.entries(importedRooms).forEach(([rId, rData]: [string, any]) => {
+        if (rData && typeof rData === 'object') {
+          const normId = normalizeRoomId(rId);
+          rooms[normId] = {
+            ...rData,
+            id: normId,
+            participants: {},
+            cursors: {},
+          };
+        }
+      });
+    }
+
+    // Write to disk immediately
+    saveDataSync();
+
+    return res.json({
+      success: true,
+      message: 'Файл сохранения успешно применен',
+      stats: {
+        roomsCount: Object.keys(rooms).length,
+        usersCount: Object.keys(users).length,
+        inviteCodesCount: Object.keys(inviteCodes).length,
+      },
+      savedBoards: users[cleanUsername]?.savedBoards || [],
+    });
+  });
+
   // Revoke a user's access to a board
   app.post('/api/users/revoke-access', (req, res) => {
     const { username, roomId } = req.body;
