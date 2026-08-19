@@ -23,13 +23,10 @@ import {
   Image as ImageIcon,
   Flame,
   Hand,
-  ChevronRight,
   Undo2,
   Redo2,
   Trash2,
   Download,
-  Plus,
-  ChevronLeft,
   Layers,
   Palette,
   Sigma,
@@ -51,10 +48,6 @@ interface ToolbarProps {
   userRole: UserRole;
   userName: string;
   userColor: string;
-  pageIndex: number;
-  totalPages: number;
-  onPageChange: (index: number) => void;
-  onAddPage: () => void;
   onClearPage: () => void;
   canUndo: boolean;
   canRedo: boolean;
@@ -76,10 +69,6 @@ export const Toolbar: React.FC<ToolbarProps> = ({
   canEdit,
   userName,
   userColor,
-  pageIndex,
-  totalPages,
-  onPageChange,
-  onAddPage,
   onClearPage,
   canUndo,
   canRedo,
@@ -767,39 +756,7 @@ export const Toolbar: React.FC<ToolbarProps> = ({
           <Redo2 className="w-4 h-4" />
         </button>
 
-        {/* Page Switcher */}
-        <div className="flex flex-col items-center bg-slate-100 rounded-xl p-1 w-full">
-          <span className="text-[10px] font-bold text-slate-700 mb-0.5">
-            {pageIndex + 1}/{totalPages}
-          </span>
-          <div className="flex items-center gap-0.5">
-            <button
-              onClick={() => onPageChange(Math.max(0, pageIndex - 1))}
-              disabled={pageIndex === 0}
-              title="Предыдущая страница"
-              className="p-1 rounded text-slate-600 hover:text-slate-900 disabled:opacity-20 transition cursor-pointer"
-            >
-              <ChevronLeft className="w-3 h-3" />
-            </button>
-            <button
-              onClick={() => onPageChange(Math.min(totalPages - 1, pageIndex + 1))}
-              disabled={pageIndex >= totalPages - 1}
-              title="Следующая страница"
-              className="p-1 rounded text-slate-600 hover:text-slate-900 disabled:opacity-20 transition cursor-pointer"
-            >
-              <ChevronRight className="w-3 h-3" />
-            </button>
-          </div>
-          <button
-            onClick={onAddPage}
-            title="Добавить страницу"
-            className="w-full mt-1 py-0.5 bg-white hover:bg-blue-50 text-blue-600 rounded text-[10px] font-bold shadow-xs transition flex items-center justify-center cursor-pointer"
-          >
-            <Plus className="w-3 h-3" />
-          </button>
-        </div>
-
-        {/* Clear Page */}
+        {/* Clear Board */}
         <button
           onClick={onClearPage}
           disabled={!canEdit}

@@ -1160,16 +1160,9 @@ export const JoinModal: React.FC<AuthModalProps> = ({ onJoinRoom }) => {
 
                     {/* Bottom Row: Metadata & Quick Join Button */}
                     <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between text-[10px] text-slate-500">
-                      <div className="flex items-center gap-2">
-                        <span className="flex items-center gap-1 text-slate-500 font-medium">
-                          <Layers className="w-3 h-3 text-slate-400" />
-                          <span>{pageCount} стр.</span>
-                        </span>
-                        <span>•</span>
-                        <span className="flex items-center gap-1 text-slate-400">
-                          <Clock className="w-3 h-3" />
-                          <span>{formatDate(b.lastVisited)}</span>
-                        </span>
+                      <div className="flex items-center gap-1.5 text-slate-400">
+                        <Clock className="w-3 h-3" />
+                        <span>{formatDate(b.lastVisited)}</span>
                       </div>
 
                       <div className="flex items-center gap-1">
