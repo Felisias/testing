@@ -16,7 +16,7 @@ import { CodeFile, CodeCursor, CodeSelection } from '../../types/extra';
 import { Participant } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { voiceManager } from '../../services/webrtc';
-import { getSuggestions, cleanInsertText, CodeSuggestion } from './codeSuggestions';
+import { getSuggestions, cleanInsertText, expandSnippet, CodeSuggestion } from './codeSuggestions';
 import { AutocompletePopup } from './AutocompletePopup';
 import {
   Code2,
@@ -596,7 +596,24 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     }));
   };
 
-  // Insert selected autocomplete suggestion
+  // Helper to compute string diff for concurrent typing splice
+  function computeSplice(oldStr: string, newStr: string) {
+    let start = 0;
+    while (start < oldStr.length && start < newStr.length && oldStr[start] === newStr[start]) {
+      start++;
+    }
+    let oldEnd = oldStr.length - 1;
+    let newEnd = newStr.length - 1;
+    while (oldEnd >= start && newEnd >= start && oldStr[oldEnd] === newStr[newEnd]) {
+      oldEnd--;
+      newEnd--;
+    }
+    const deleteCount = Math.max(0, oldEnd - start + 1);
+    const insertText = newStr.substring(start, newEnd + 1);
+    return { start, deleteCount, insertText };
+  }
+
+  // Insert selected autocomplete suggestion with snippet placeholder expansion
   const handleSelectSuggestion = (item: CodeSuggestion) => {
     if (!textareaRef.current || !activeFile || !autocomplete) return;
     const el = textareaRef.current;
@@ -604,17 +621,22 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     const wordStart = autocomplete.wordStart;
     const cursorIndex = el.selectionStart;
 
-    const inserted = cleanInsertText(item.insertText);
-    const nextVal = val.substring(0, wordStart) + inserted + val.substring(cursorIndex);
+    const expansion = expandSnippet(item.insertText);
+    const nextVal = val.substring(0, wordStart) + expansion.text + val.substring(cursorIndex);
 
     handleContentChange(nextVal);
     setAutocomplete(null);
 
     setTimeout(() => {
       if (textareaRef.current) {
-        const newPos = wordStart + inserted.length;
+        const targetPos = wordStart + expansion.cursorOffset;
         textareaRef.current.focus();
-        textareaRef.current.selectionStart = textareaRef.current.selectionEnd = newPos;
+        if (expansion.selectionLength > 0) {
+          textareaRef.current.selectionStart = targetPos;
+          textareaRef.current.selectionEnd = targetPos + expansion.selectionLength;
+        } else {
+          textareaRef.current.selectionStart = textareaRef.current.selectionEnd = targetPos;
+        }
         broadcastCursorPosition();
       }
     }, 0);
@@ -624,8 +646,93 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   useEffect(() => {
     const socket = getSocket();
 
+    const handleInitResponse = (data: { files?: CodeFile[]; cursors?: Record<string, CodeCursor> }) => {
+      if (data.files && data.files.length > 0) {
+        setFiles(data.files);
+        setActiveFileId((prev) => {
+          if (data.files!.some((f) => f.id === prev)) return prev;
+          return data.files![0].id;
+        });
+      }
+      if (data.cursors) {
+        setOtherCursors(data.cursors);
+      }
+    };
+
+    const handleCodePatch = (data: {
+      fileId: string;
+      start: number;
+      deleteCount: number;
+      insertText: string;
+      fullContent?: string;
+      senderId: string;
+    }) => {
+      if (data.senderId === myUserId || (socket.id && data.senderId === socket.id)) return;
+
+      setFiles((prev) => {
+        const file = prev.find((f) => f.id === data.fileId);
+        if (!file) return prev;
+        const nextContent =
+          typeof data.fullContent === 'string'
+            ? data.fullContent
+            : file.content.substring(0, data.start) +
+              data.insertText +
+              file.content.substring(data.start + data.deleteCount);
+        return prev.map((f) => (f.id === data.fileId ? { ...f, content: nextContent } : f));
+      });
+
+      // Maintain active user cursor position without jumping or conflicts
+      if (data.fileId === activeFileId && textareaRef.current) {
+        const el = textareaRef.current;
+        const curStart = el.selectionStart;
+        const curEnd = el.selectionEnd;
+        const val = el.value;
+
+        const updated =
+          typeof data.fullContent === 'string'
+            ? data.fullContent
+            : val.substring(0, data.start) +
+              data.insertText +
+              val.substring(data.start + data.deleteCount);
+
+        const delta = data.insertText.length - data.deleteCount;
+        let newStart = curStart;
+        let newEnd = curEnd;
+
+        if (data.start + data.deleteCount <= curStart) {
+          newStart = Math.max(0, curStart + delta);
+          newEnd = Math.max(0, curEnd + delta);
+        } else if (data.start >= curEnd) {
+          newStart = curStart;
+          newEnd = curEnd;
+        } else {
+          newStart = Math.min(updated.length, data.start + data.insertText.length);
+          newEnd = newStart;
+        }
+
+        el.value = updated;
+        requestAnimationFrame(() => {
+          if (textareaRef.current) {
+            textareaRef.current.selectionStart = Math.min(updated.length, Math.max(0, newStart));
+            textareaRef.current.selectionEnd = Math.min(updated.length, Math.max(0, newEnd));
+          }
+        });
+      }
+
+      setOtherCursors((prev) => {
+        if (!prev[data.senderId]) return prev;
+        return {
+          ...prev,
+          [data.senderId]: {
+            ...prev[data.senderId],
+            lastActive: Date.now(),
+          },
+        };
+      });
+    };
+
     const handleCodeSync = (data: { fileId: string; content: string; senderId: string }) => {
-      if (data.senderId === myUserId) return;
+      if (data.senderId === myUserId || (socket.id && data.senderId === socket.id)) return;
 
       setFiles((prev) =>
         prev.map((f) => (f.id === data.fileId ? { ...f, content: data.content } : f))
@@ -661,6 +768,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
             newEnd = Math.max(prefixLen, curEnd + diff);
           }
 
+          el.value = newText;
           requestAnimationFrame(() => {
             if (textareaRef.current) {
               textareaRef.current.selectionStart = Math.min(newText.length, Math.max(0, newStart));
@@ -700,7 +808,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     };
 
     const handleCursorSync = (cursor: CodeCursor) => {
-      if (cursor.userId === myUserId) return;
+      if (cursor.userId === myUserId || (socket.id && cursor.userId === socket.id)) return;
       setOtherCursors((prev) => ({
         ...prev,
         [cursor.userId]: {
@@ -710,21 +818,37 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       }));
     };
 
+    const handleCursorRemoved = (data: { userId: string }) => {
+      setOtherCursors((prev) => {
+        const next = { ...prev };
+        delete next[data.userId];
+        return next;
+      });
+    };
+
     const handleOutputSync = (data: { output: string; senderName: string }) => {
       setOutput(data.output);
     };
 
+    socket.on('ide:init:response', handleInitResponse);
+    socket.on('ide:code:patch', handleCodePatch);
     socket.on('ide:code:sync', handleCodeSync);
     socket.on('ide:file:created', handleFileCreated);
     socket.on('ide:file:deleted', handleFileDeleted);
     socket.on('ide:cursor:sync', handleCursorSync);
+    socket.on('ide:cursor:removed', handleCursorRemoved);
     socket.on('ide:output:sync', handleOutputSync);
 
+    socket.emit('ide:init:request');
+
     return () => {
+      socket.off('ide:init:response', handleInitResponse);
+      socket.off('ide:code:patch', handleCodePatch);
       socket.off('ide:code:sync', handleCodeSync);
       socket.off('ide:file:created', handleFileCreated);
       socket.off('ide:file:deleted', handleFileDeleted);
       socket.off('ide:cursor:sync', handleCursorSync);
+      socket.off('ide:cursor:removed', handleCursorRemoved);
       socket.off('ide:output:sync', handleOutputSync);
     };
   }, [activeFileId, myUserId]);
@@ -733,14 +857,29 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   const handleContentChange = (newContent: string) => {
     if (!activeFile) return;
 
+    const oldContent = activeFile.content;
+    const splice = computeSplice(oldContent, newContent);
+
     setFiles((prev) =>
       prev.map((f) => (f.id === activeFile.id ? { ...f, content: newContent } : f))
     );
 
-    getSocket().emit('ide:code:change', {
+    const socket = getSocket();
+    const senderId = myUserId || socket.id;
+
+    socket.emit('ide:code:patch', {
+      fileId: activeFile.id,
+      start: splice.start,
+      deleteCount: splice.deleteCount,
+      insertText: splice.insertText,
+      fullContent: newContent,
+      senderId,
+    });
+
+    socket.emit('ide:code:change', {
       fileId: activeFile.id,
       content: newContent,
-      senderId: myUserId,
+      senderId,
     });
 
     if (textareaRef.current) {
@@ -786,6 +925,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       color: userColor,
       avatar: userAvatar,
       fileId: activeFile.id,
+      fileName: activeFile.name,
       lineNumber,
       column,
       selection,
@@ -795,8 +935,13 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     updateAutocomplete(val, selStart, activeFile.language);
   };
 
-  // Keyboard navigation for Autocomplete and Tab indentation
+  // Keyboard navigation for Autocomplete, Auto-closing brackets, and Smart Auto-indentation
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    const el = e.currentTarget;
+    const start = el.selectionStart;
+    const end = el.selectionEnd;
+    const val = el.value;
+
     // 1. If autocomplete popup is active, capture Arrow navigation, Tab/Enter selection, and Esc
     if (autocomplete && autocomplete.suggestions.length > 0) {
       if (e.key === 'ArrowDown') {
@@ -853,14 +998,9 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       return;
     }
 
-    // 3. Tab indentation handling
+    // 3. Tab & Shift+Tab indentation handling
     if (e.key === 'Tab') {
       e.preventDefault();
-      const el = e.currentTarget;
-      const start = el.selectionStart;
-      const end = el.selectionEnd;
-      const val = el.value;
-
       if (e.shiftKey) {
         // Shift+Tab: unindent
         const lineStart = val.lastIndexOf('\n', start - 1) + 1;
@@ -882,6 +1022,141 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
           broadcastCursorPosition();
         }, 0);
       }
+      return;
+    }
+
+    // 4. Auto-closing brackets and quotes: (), [], {}, "", '', ``
+    const openBrackets: Record<string, string> = {
+      '(': ')',
+      '[': ']',
+      '{': '}',
+      '"': '"',
+      "'": "'",
+      '`': '`',
+    };
+
+    // Step-over closing character if user types it directly when next char already matches
+    if (
+      start === end &&
+      (e.key === ')' ||
+        e.key === ']' ||
+        e.key === '}' ||
+        e.key === '"' ||
+        e.key === "'" ||
+        e.key === '`')
+    ) {
+      if (val[start] === e.key) {
+        e.preventDefault();
+        el.selectionStart = el.selectionEnd = start + 1;
+        broadcastCursorPosition();
+        return;
+      }
+    }
+
+    // Auto-insert closing pair or wrap selection
+    if (openBrackets[e.key]) {
+      const closeChar = openBrackets[e.key];
+      e.preventDefault();
+
+      if (start !== end) {
+        // Wrap active selection
+        const selectedText = val.substring(start, end);
+        const wrapped = e.key + selectedText + closeChar;
+        const nextVal = val.substring(0, start) + wrapped + val.substring(end);
+        handleContentChange(nextVal);
+        setTimeout(() => {
+          el.selectionStart = start + 1;
+          el.selectionEnd = end + 1;
+          broadcastCursorPosition();
+        }, 0);
+      } else {
+        // Insert pair and place cursor between
+        const nextVal = val.substring(0, start) + e.key + closeChar + val.substring(end);
+        handleContentChange(nextVal);
+        setTimeout(() => {
+          el.selectionStart = el.selectionEnd = start + 1;
+          broadcastCursorPosition();
+        }, 0);
+      }
+      return;
+    }
+
+    // 5. Backspace pair deletion: if cursor is between (), [], {}, "", '', ``
+    if (e.key === 'Backspace' && start === end && start > 0) {
+      const charBefore = val[start - 1];
+      const charAfter = val[start];
+      if (
+        (charBefore === '(' && charAfter === ')') ||
+        (charBefore === '[' && charAfter === ']') ||
+        (charBefore === '{' && charAfter === '}') ||
+        (charBefore === '"' && charAfter === '"') ||
+        (charBefore === "'" && charAfter === "'") ||
+        (charBefore === '`' && charAfter === '`')
+      ) {
+        e.preventDefault();
+        const nextVal = val.substring(0, start - 1) + val.substring(start + 1);
+        handleContentChange(nextVal);
+        setTimeout(() => {
+          el.selectionStart = el.selectionEnd = start - 1;
+          broadcastCursorPosition();
+        }, 0);
+        return;
+      }
+    }
+
+    // 6. Smart Auto-Indentation on Enter (Python def/if/for/class/etc. with ':' and JS/C++ '{')
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      const lineStart = val.lastIndexOf('\n', start - 1) + 1;
+      const currentLine = val.substring(lineStart, start);
+      const indentMatch = currentLine.match(/^(\s*)/);
+      const baseIndent = indentMatch ? indentMatch[1] : '';
+      const trimmedLine = currentLine.trim();
+
+      const charBefore = val[start - 1];
+      const charAfter = val[start];
+
+      // Case A: Enter between '{' and '}' or '(' and ')'
+      if ((charBefore === '{' && charAfter === '}') || (charBefore === '(' && charAfter === ')')) {
+        const extraIndent = baseIndent + '    ';
+        const insertText = '\n' + extraIndent + '\n' + baseIndent;
+        const nextVal = val.substring(0, start) + insertText + val.substring(end);
+        handleContentChange(nextVal);
+        setTimeout(() => {
+          el.selectionStart = el.selectionEnd = start + 1 + extraIndent.length;
+          broadcastCursorPosition();
+        }, 0);
+        return;
+      }
+
+      // Case B: Line ends with ':' (Python def, if, for, while, class, try, except, etc.) or '{', '(', '[', '=>'
+      if (
+        trimmedLine.endsWith(':') ||
+        trimmedLine.endsWith('{') ||
+        trimmedLine.endsWith('(') ||
+        trimmedLine.endsWith('[') ||
+        trimmedLine.endsWith('=>')
+      ) {
+        const extraIndent = baseIndent + '    ';
+        const insertText = '\n' + extraIndent;
+        const nextVal = val.substring(0, start) + insertText + val.substring(end);
+        handleContentChange(nextVal);
+        setTimeout(() => {
+          el.selectionStart = el.selectionEnd = start + insertText.length;
+          broadcastCursorPosition();
+        }, 0);
+        return;
+      }
+
+      // Case C: Standard newline preserving current indentation
+      const insertText = '\n' + baseIndent;
+      const nextVal = val.substring(0, start) + insertText + val.substring(end);
+      handleContentChange(nextVal);
+      setTimeout(() => {
+        el.selectionStart = el.selectionEnd = start + insertText.length;
+        broadcastCursorPosition();
+      }, 0);
+      return;
     }
   };
 
@@ -1311,39 +1586,69 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                 );
               })}
 
-              {/* Pixel-Accurate Remote Cursors Overlay (Caret lines only, NO floating name labels, distinct colors) */}
+              {/* Hidden Char Width Measurement Node */}
+              <span
+                ref={charMeasureRef}
+                aria-hidden="true"
+                className="absolute opacity-0 pointer-events-none font-mono text-[13px] whitespace-pre select-none"
+                style={{
+                  fontFamily:
+                    'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+                }}
+              >
+                0123456789
+              </span>
+
+              {/* Pixel-Accurate Remote Cursors Overlay with clear participant badge */}
               {(Object.values(otherCursors) as CodeCursor[]).map((c) => {
-                if (c.fileId && c.fileId !== activeFile?.id) return null;
+                if (
+                  c.fileId &&
+                  activeFile?.id &&
+                  c.fileId !== activeFile.id &&
+                  c.fileName &&
+                  activeFile?.name &&
+                  c.fileName !== activeFile.name
+                ) {
+                  return null;
+                }
 
                 const topPos = (c.lineNumber - 1) * LINE_HEIGHT + PADDING_TOP - scrollPos.top;
                 const leftPos = (c.column - 1) * charWidth + PADDING_LEFT - scrollPos.left;
 
-                if (topPos < -20 || topPos > 2000 || leftPos < -20 || leftPos > 4000) {
+                if (topPos < -40 || topPos > 3000 || leftPos < -40 || leftPos > 4000) {
                   return null;
                 }
 
-                const isInactive = c.lastActive ? currentTime - c.lastActive > 4000 : false;
+                const isInactive = c.lastActive ? currentTime - c.lastActive > 8000 : false;
                 const color = getDistinctRemoteColor(c.color, userColor, c.userId);
 
                 return (
                   <div
                     key={`cur-${c.userId}`}
                     className={`absolute pointer-events-none transition-all duration-75 z-20 ${
-                      isInactive ? 'opacity-40' : 'opacity-100'
+                      isInactive ? 'opacity-50' : 'opacity-100'
                     }`}
                     style={{
                       top: `${topPos}px`,
                       left: `${leftPos}px`,
                     }}
                   >
-                    {/* Caret Line: Solid distinct-colored bar with subtle glow */}
+                    {/* Caret Line: Solid distinct-colored bar with glow */}
                     <div
-                      className="w-[2.5px] h-[22px] rounded-xs shadow-xs transition-colors duration-200"
+                      className="w-[2.5px] h-[22px] rounded-xs shadow-xs"
                       style={{
                         backgroundColor: color,
-                        boxShadow: `0 0 6px ${color}80`,
+                        boxShadow: `0 0 8px ${color}90`,
                       }}
                     />
+                    {/* Visible participant name badge */}
+                    <div
+                      className="absolute -top-4.5 left-0 text-[10px] font-sans font-medium px-1.5 py-0.2 rounded shadow-xs whitespace-nowrap select-none text-white pointer-events-none flex items-center gap-1 opacity-90 transition-opacity"
+                      style={{ backgroundColor: color }}
+                    >
+                      <span className="text-[9px]">{c.avatar || '👤'}</span>
+                      <span>{c.userName}</span>
+                    </div>
                   </div>
                 );
               })}

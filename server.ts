@@ -40,6 +40,13 @@ interface ChatMessage {
   timestamp: number;
 }
 
+interface CodeFileRecord {
+  id: string;
+  name: string;
+  language: string;
+  content: string;
+}
+
 interface RoomData {
   id: string;
   title: string;
@@ -64,6 +71,21 @@ interface RoomData {
       x: number;
       y: number;
       pageIndex: number;
+      updatedAt: number;
+    };
+  };
+  ideFiles?: CodeFileRecord[];
+  ideCursors?: {
+    [socketId: string]: {
+      userId: string;
+      userName: string;
+      color: string;
+      avatar: string;
+      fileId: string;
+      fileName?: string;
+      lineNumber: number;
+      column: number;
+      selection?: any;
       updatedAt: number;
     };
   };
@@ -345,6 +367,24 @@ function getOrCreateRoom(roomId: string, title?: string, subject?: string): Room
       0: [],
     },
     participants: {},
+    cursors: {},
+    ideFiles: [
+      {
+        id: 'main-py',
+        name: 'main.py',
+        language: 'python',
+        content: `# main.py
+
+def main():
+    print("Привет! Добро пожаловать в совместную среду разработки.")
+    print("Вы можете писать код вместе с преподавателем в реальном времени!")
+
+if __name__ == "__main__":
+    main()
+`,
+      },
+    ],
+    ideCursors: {},
     chatMessages: [
       {
         id: 'welcome-1',
@@ -1827,8 +1867,78 @@ async function startServer() {
     });
 
     // ================= IDE Collaborative Real-time Events =================
+    socket.on('ide:init:request', () => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      if (!room.ideFiles || room.ideFiles.length === 0) {
+        room.ideFiles = [
+          {
+            id: 'main-py',
+            name: 'main.py',
+            language: 'python',
+            content: `# main.py\n\ndef main():\n    print("Привет! Добро пожаловать в совместную среду разработки.")\n    print("Вы можете писать код вместе с преподавателем в реальном времени!")\n\nif __name__ == "__main__":\n    main()\n`,
+          },
+        ];
+      }
+      socket.emit('ide:init:response', {
+        files: room.ideFiles,
+        cursors: room.ideCursors || {},
+      });
+    });
+
+    socket.on(
+      'ide:code:patch',
+      (data: {
+        fileId: string;
+        start: number;
+        deleteCount: number;
+        insertText: string;
+        fullContent?: string;
+        senderId?: string;
+        version?: number;
+      }) => {
+        if (!currentRoomId || !rooms[currentRoomId]) return;
+        const room = rooms[currentRoomId];
+        if (!room.ideFiles) room.ideFiles = [];
+        const file = room.ideFiles.find((f) => f.id === data.fileId);
+        if (file) {
+          if (typeof data.fullContent === 'string') {
+            file.content = data.fullContent;
+          } else if (
+            typeof data.start === 'number' &&
+            typeof data.deleteCount === 'number' &&
+            typeof data.insertText === 'string'
+          ) {
+            file.content =
+              file.content.substring(0, data.start) +
+              data.insertText +
+              file.content.substring(data.start + data.deleteCount);
+          }
+          scheduleSave();
+        }
+        socket.to(currentRoomId).emit('ide:code:patch', {
+          ...data,
+          senderId: socket.id,
+        });
+      }
+    );
+
     socket.on('ide:code:change', (data: { fileId: string; content: string; senderId: string; version?: number }) => {
       if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      if (!room.ideFiles) room.ideFiles = [];
+      const file = room.ideFiles.find((f) => f.id === data.fileId);
+      if (file) {
+        file.content = data.content;
+      } else {
+        room.ideFiles.push({
+          id: data.fileId,
+          name: 'script.py',
+          language: 'python',
+          content: data.content,
+        });
+      }
+      scheduleSave();
       socket.to(currentRoomId).emit('ide:code:sync', {
         fileId: data.fileId,
         content: data.content,
@@ -1839,22 +1949,38 @@ async function startServer() {
 
     socket.on('ide:cursor:move', (data: any) => {
       if (!currentRoomId || !rooms[currentRoomId]) return;
-      socket.to(currentRoomId).emit('ide:cursor:sync', {
+      const room = rooms[currentRoomId];
+      if (!room.ideCursors) room.ideCursors = {};
+      const cursorPayload = {
         ...data,
         userId: socket.id,
         userName: currentUser?.name || data.userName,
         color: currentUser?.color || data.color,
         avatar: currentUser?.avatar || data.avatar,
-      });
+        updatedAt: Date.now(),
+      };
+      room.ideCursors[socket.id] = cursorPayload;
+      socket.to(currentRoomId).emit('ide:cursor:sync', cursorPayload);
     });
 
-    socket.on('ide:file:create', (data: { file: any }) => {
+    socket.on('ide:file:create', (data: { file: CodeFileRecord }) => {
       if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      if (!room.ideFiles) room.ideFiles = [];
+      if (!room.ideFiles.some((f) => f.id === data.file.id)) {
+        room.ideFiles.push(data.file);
+        scheduleSave();
+      }
       socket.to(currentRoomId).emit('ide:file:created', { file: data.file });
     });
 
     socket.on('ide:file:delete', (data: { fileId: string }) => {
       if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      if (room.ideFiles) {
+        room.ideFiles = room.ideFiles.filter((f) => f.id !== data.fileId);
+        scheduleSave();
+      }
       socket.to(currentRoomId).emit('ide:file:deleted', { fileId: data.fileId });
     });
 
@@ -1871,6 +1997,10 @@ async function startServer() {
       if (currentRoomId && rooms[currentRoomId] && currentUser) {
         const room = rooms[currentRoomId];
         delete room.participants[socket.id];
+        if (room.ideCursors) {
+          delete room.ideCursors[socket.id];
+          io.to(currentRoomId).emit('ide:cursor:removed', { userId: socket.id });
+        }
 
         const leaveMsg: ChatMessage = {
           id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,

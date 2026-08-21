@@ -54,6 +54,7 @@ export interface CodeCursor {
   color: string;
   avatar?: string;
   fileId?: string;
+  fileName?: string;
   lineNumber: number;
   column: number;
   selection?: CodeSelection | null;

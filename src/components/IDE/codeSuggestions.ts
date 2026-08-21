@@ -51,24 +51,25 @@ const LANGUAGE_BUILTINS: Record<string, CodeSuggestion[]> = {
     { label: 'startswith', insertText: 'startswith("${1:prefix}")', type: 'method', detail: 'str.startswith(prefix)' },
     { label: 'endswith', insertText: 'endswith("${1:suffix}")', type: 'method', detail: 'str.endswith(suffix)' },
 
-    // Keywords
-    { label: 'def', insertText: 'def ${1:func_name}(${2:params}):\n    ${3:pass}', type: 'keyword', detail: 'Определение функции' },
-    { label: 'class', insertText: 'class ${1:ClassName}:\n    def __init__(self${2:}):\n        ${3:pass}', type: 'keyword', detail: 'Определение класса' },
-    { label: 'if', insertText: 'if ${1:condition}:\n    ${2:pass}', type: 'keyword', detail: 'Условный оператор' },
-    { label: 'elif', insertText: 'elif ${1:condition}:\n    ${2:pass}', type: 'keyword', detail: 'Ветка elif' },
-    { label: 'else', insertText: 'else:\n    ${1:pass}', type: 'keyword', detail: 'Ветка else' },
-    { label: 'for', insertText: 'for ${1:item} in ${2:iterable}:\n    ${3:pass}', type: 'keyword', detail: 'Цикл for' },
-    { label: 'while', insertText: 'while ${1:condition}:\n    ${2:pass}', type: 'keyword', detail: 'Цикл while' },
+    // Keywords & Snippets
+    { label: 'def', insertText: 'def ${1:func_name}(${2:params}):\n    ${3:pass}', type: 'snippet', detail: 'def func_name(params): ...' },
+    { label: 'def main', insertText: 'def main():\n    ${1:print("Hello, World!")}\n\nif __name__ == "__main__":\n    main()', type: 'snippet', detail: 'Шаблон точки входа main()' },
+    { label: 'def __init__', insertText: 'def __init__(self, ${1:args}):\n    ${2:pass}', type: 'snippet', detail: 'Конструктор класса __init__' },
+    { label: 'def async', insertText: 'async def ${1:func_name}(${2:params}):\n    ${3:pass}', type: 'snippet', detail: 'Асинхронная функция' },
+    { label: 'def method', insertText: 'def ${1:method_name}(self, ${2:args}):\n    ${3:pass}', type: 'snippet', detail: 'Метод класса' },
+    { label: 'class', insertText: 'class ${1:ClassName}:\n    def __init__(self, ${2:args}):\n        ${3:pass}', type: 'snippet', detail: 'Определение класса' },
+    { label: 'for in range', insertText: 'for ${1:i} in range(${2:10}):\n    ${3:pass}', type: 'snippet', detail: 'Цикл for i in range(n)' },
+    { label: 'for in list', insertText: 'for ${1:item} in ${2:items}:\n    ${3:pass}', type: 'snippet', detail: 'Итерация по элементам' },
+    { label: 'if', insertText: 'if ${1:condition}:\n    ${2:pass}', type: 'snippet', detail: 'Условный оператор if' },
+    { label: 'elif', insertText: 'elif ${1:condition}:\n    ${2:pass}', type: 'snippet', detail: 'Ветка elif' },
+    { label: 'else', insertText: 'else:\n    ${1:pass}', type: 'snippet', detail: 'Ветка else' },
+    { label: 'while', insertText: 'while ${1:condition}:\n    ${2:pass}', type: 'snippet', detail: 'Цикл while' },
+    { label: 'try except', insertText: 'try:\n    ${1:pass}\nexcept ${2:Exception} as e:\n    ${3:print(e)}', type: 'snippet', detail: 'Обработка ошибок try/except' },
+    { label: 'with open', insertText: 'with open("${1:file.txt}", "${2:r}", encoding="utf-8") as ${3:f}:\n    ${4:data = f.read()}', type: 'snippet', detail: 'Чтение/запись файла' },
     { label: 'return', insertText: 'return ${1:}', type: 'keyword', detail: 'Возврат значения из функции' },
     { label: 'import', insertText: 'import ${1:module}', type: 'keyword', detail: 'Импорт модуля' },
-    { label: 'from', insertText: 'from ${1:module} import ${2:name}', type: 'keyword', detail: 'Импорт из модуля' },
-    { label: 'try', insertText: 'try:\n    ${1:pass}\nexcept Exception as e:\n    ${2:print(e)}', type: 'keyword', detail: 'Обработка исключений' },
-    { label: 'except', insertText: 'except ${1:Exception} as ${2:e}:', type: 'keyword', detail: 'Блок except' },
-    { label: 'finally', insertText: 'finally:\n    ${1:pass}', type: 'keyword', detail: 'Блок finally' },
-    { label: 'with', insertText: 'with ${1:open("file.txt", "r")} as ${2:f}:\n    ${3:pass}', type: 'keyword', detail: 'Контекстный менеджер' },
-    { label: 'async', insertText: 'async def ${1:func_name}():\n    ${2:pass}', type: 'keyword', detail: 'Асинхронная функция' },
-    { label: 'await', insertText: 'await ${1:coroutine}', type: 'keyword', detail: 'Ожидание корутины' },
-    { label: 'lambda', insertText: 'lambda ${1:x}: ${2:x}', type: 'keyword', detail: 'Анонимная функция' },
+    { label: 'from import', insertText: 'from ${1:module} import ${2:name}', type: 'keyword', detail: 'Импорт из модуля' },
+    { label: 'lambda', insertText: 'lambda ${1:x}: ${2:x}', type: 'keyword', detail: 'Анонимная lambda функция' },
     { label: 'yield', insertText: 'yield ${1:value}', type: 'keyword', detail: 'Генератор yield' },
     { label: 'break', insertText: 'break', type: 'keyword', detail: 'Прерывание цикла' },
     { label: 'continue', insertText: 'continue', type: 'keyword', detail: 'Следующая итерация' },
@@ -78,6 +79,7 @@ const LANGUAGE_BUILTINS: Record<string, CodeSuggestion[]> = {
     { label: 'None', insertText: 'None', type: 'keyword', detail: 'Значение None' },
     { label: 'self', insertText: 'self', type: 'variable', detail: 'Ссылка на экземпляр класса' },
     { label: '__init__', insertText: '__init__(self${1:}):', type: 'method', detail: 'Конструктор класса' },
+    { label: '__name__', insertText: '__name__ == "__main__"', type: 'snippet', detail: 'Проверка главного модуля' },
     { label: '__main__', insertText: 'if __name__ == "__main__":\n    ${1:main()}', type: 'snippet', detail: 'Точка входа скрипта' },
     { label: 'math', insertText: 'import math', type: 'keyword', detail: 'Модуль математики' },
     { label: 'random', insertText: 'import random', type: 'keyword', detail: 'Модуль случайных чисел' },
@@ -214,6 +216,38 @@ const LANGUAGE_BUILTINS: Record<string, CodeSuggestion[]> = {
     { label: 'MAX', insertText: 'MAX(${1:column})', type: 'function', detail: 'Максимум' },
   ],
 };
+
+export interface SnippetExpansion {
+  text: string;
+  cursorOffset: number;
+  selectionLength: number;
+}
+
+// Expand snippet and compute precise cursor position & selection length
+export function expandSnippet(template: string): SnippetExpansion {
+  let cursorOffset = -1;
+  let selectionLength = 0;
+
+  const firstMatch = template.match(/\$\{(?:1):?([^}]*)\}/);
+  if (firstMatch && firstMatch.index !== undefined) {
+    const defaultVal = firstMatch[1] || '';
+    const before = template.substring(0, firstMatch.index);
+    const cleanBefore = before.replace(/\$\{\d+:?([^}]*)\}/g, '$1');
+    cursorOffset = cleanBefore.length;
+    selectionLength = defaultVal.length;
+  }
+
+  const cleanText = template.replace(/\$\{\d+:?([^}]*)\}/g, '$1');
+  if (cursorOffset === -1) {
+    cursorOffset = cleanText.length;
+  }
+
+  return {
+    text: cleanText,
+    cursorOffset,
+    selectionLength,
+  };
+}
 
 // Clean snippet placeholders ${1:text} -> text
 export function cleanInsertText(text: string): string {
