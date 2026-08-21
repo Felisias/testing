@@ -60,3 +60,13 @@ export interface CodeCursor {
   selection?: CodeSelection | null;
   lastActive?: number;
 }
+
+export interface CodePlot {
+  id: string;
+  name: string;
+  dataUrl: string;
+  size?: number;
+  createdAt: number;
+  authorName?: string;
+}
+

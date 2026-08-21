@@ -879,6 +879,38 @@ export default function App() {
     handleRecordAction({ type: 'create', elements: [imgEl] });
   };
 
+  const handleSendPlotToBoard = (plot: { name: string; dataUrl: string }) => {
+    const img = new Image();
+    img.onload = () => {
+      const maxWidth = 560;
+      const aspect = (img.height || 350) / (img.width || 500);
+      const width = Math.min(maxWidth, img.width || 480);
+      const height = width * aspect;
+
+      const newImgElement: ImageElement = {
+        id: `img-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        type: 'image',
+        userId: myUserId,
+        userName: userName,
+        userColor: userColor,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        x: 100 + Math.random() * 60,
+        y: 100 + Math.random() * 60,
+        width,
+        height,
+        src: plot.dataUrl,
+        aspectRatio: aspect,
+      };
+
+      setCurrentElements((prev) => [...prev, newImgElement]);
+      getSocket().emit('board:element:create', { element: newImgElement, pageIndex: activePageIndex });
+      handleRecordAction({ type: 'create', elements: [newImgElement] });
+      showToast(`📊 График «${plot.name}» вставлен на интерактивную доску!`);
+    };
+    img.src = plot.dataUrl;
+  };
+
   const handleExportPNG = () => {
     const canvas = document.querySelector('canvas') as HTMLCanvasElement;
     if (!canvas) return;
@@ -1072,6 +1104,7 @@ export default function App() {
             userAvatar={userAvatar}
             participants={participants}
             onBackToBoard={() => setActiveView('board')}
+            onSendPlotToBoard={handleSendPlotToBoard}
           />
         </div>
 

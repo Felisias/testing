@@ -12,12 +12,13 @@ import 'prismjs/components/prism-json';
 import 'prismjs/components/prism-bash';
 
 import { getSocket } from '../../services/socket';
-import { CodeFile, CodeCursor, CodeSelection } from '../../types/extra';
+import { CodeFile, CodeCursor, CodeSelection, CodePlot } from '../../types/extra';
 import { Participant } from '../../types';
 import { UserAvatar } from '../Common/UserAvatar';
 import { voiceManager } from '../../services/webrtc';
 import { getSuggestions, cleanInsertText, expandSnippet, CodeSuggestion } from './codeSuggestions';
 import { AutocompletePopup } from './AutocompletePopup';
+import { FloatingPlotViewer } from './FloatingPlotViewer';
 import {
   Code2,
   Play,
@@ -44,6 +45,11 @@ import {
   AlertCircle,
   CheckCircle2,
   Command,
+  Timer,
+  ChevronDown,
+  Settings2,
+  Image as ImageIcon,
+  Eye,
 } from 'lucide-react';
 
 interface CodeIDEProps {
@@ -55,6 +61,7 @@ interface CodeIDEProps {
   userAvatar?: string;
   participants?: Record<string, Participant>;
   onBackToBoard: () => void;
+  onSendPlotToBoard?: (plot: { name: string; dataUrl: string }) => void;
 }
 
 const DEFAULT_FILES: CodeFile[] = [
@@ -62,7 +69,31 @@ const DEFAULT_FILES: CodeFile[] = [
     id: 'main-py',
     name: 'main.py',
     language: 'python',
-    content: 'print("Hello, World!")\n',
+    content: `# TutorBoard Python IDE: Поддержка вывода графиков (Matplotlib)
+import numpy as np
+import matplotlib.pyplot as plt
+
+# Генерация данных для графика
+x = np.linspace(-5, 5, 200)
+y1 = np.sin(x)
+y2 = np.cos(x)
+
+# Построение графика
+plt.figure(figsize=(7, 4))
+plt.plot(x, y1, label='sin(x)', color='#3b82f6', linewidth=2)
+plt.plot(x, y2, label='cos(x)', color='#f43f5e', linewidth=2, linestyle='--')
+plt.title('Графики функций sin(x) и cos(x)', fontsize=12)
+plt.xlabel('Ось X')
+plt.ylabel('Ось Y')
+plt.grid(True, alpha=0.3)
+plt.legend()
+plt.tight_layout()
+
+# Вызов plt.show() автоматически открывает интерактивное окно графика!
+plt.show()
+
+print("✓ Программа выполнена. График доступен для перемещения, зума и вставки на доску!")
+`,
   },
 ];
 
@@ -112,6 +143,21 @@ interface SelectionBox {
   height: number;
 }
 
+function getColumnOffset(lineText: string, colIndex: number, charWidth: number): number {
+  // colIndex is 1-based index (1 = first character)
+  if (colIndex <= 1) return 0;
+  const prefix = lineText.substring(0, colIndex - 1);
+  let visualCols = 0;
+  for (let i = 0; i < prefix.length; i++) {
+    if (prefix[i] === '\t') {
+      visualCols += 4 - (visualCols % 4);
+    } else {
+      visualCols += 1;
+    }
+  }
+  return visualCols * charWidth;
+}
+
 function calculateSelectionBoxes(
   selection: { startLine: number; startCol: number; endLine: number; endCol: number },
   content: string,
@@ -123,28 +169,33 @@ function calculateSelectionBoxes(
   const { startLine, startCol, endLine, endCol } = selection;
 
   if (startLine === endLine) {
+    const lineText = lines[startLine - 1] || '';
+    const leftOffset = getColumnOffset(lineText, startCol, charWidth);
+    const rightOffset = getColumnOffset(lineText, endCol, charWidth);
+    const width = Math.max(charWidth * 0.5, rightOffset - leftOffset);
     const top = (startLine - 1) * LINE_HEIGHT + PADDING_TOP - scrollPos.top;
-    const left = (startCol - 1) * charWidth + PADDING_LEFT - scrollPos.left;
-    const width = Math.max(charWidth, (endCol - startCol) * charWidth);
+    const left = leftOffset + PADDING_LEFT - scrollPos.left;
     boxes.push({ top, left, width, height: LINE_HEIGHT });
   } else {
     for (let l = startLine; l <= endLine; l++) {
       const top = (l - 1) * LINE_HEIGHT + PADDING_TOP - scrollPos.top;
-      const lineLen = (lines[l - 1] || '').length;
+      const lineText = lines[l - 1] || '';
 
       if (l === startLine) {
-        const left = (startCol - 1) * charWidth + PADDING_LEFT - scrollPos.left;
-        const charCount = Math.max(1, lineLen - (startCol - 1) + 0.5);
-        const width = Math.max(charWidth, charCount * charWidth);
+        const leftOffset = getColumnOffset(lineText, startCol, charWidth);
+        const endLineOffset = getColumnOffset(lineText, lineText.length + 1, charWidth);
+        const width = Math.max(charWidth * 0.5, endLineOffset - leftOffset);
+        const left = leftOffset + PADDING_LEFT - scrollPos.left;
         boxes.push({ top, left, width, height: LINE_HEIGHT });
       } else if (l === endLine) {
         const left = PADDING_LEFT - scrollPos.left;
-        const width = Math.max(charWidth, (endCol - 1) * charWidth);
+        const rightOffset = getColumnOffset(lineText, endCol, charWidth);
+        const width = Math.max(charWidth * 0.5, rightOffset);
         boxes.push({ top, left, width, height: LINE_HEIGHT });
       } else {
         const left = PADDING_LEFT - scrollPos.left;
-        const width = Math.max(charWidth * 2, (lineLen + 0.5) * charWidth);
-        boxes.push({ top, left, width, height: LINE_HEIGHT });
+        const fullLineWidth = Math.max(charWidth, getColumnOffset(lineText, lineText.length + 1, charWidth));
+        boxes.push({ top, left, width: fullLineWidth, height: LINE_HEIGHT });
       }
     }
   }
@@ -187,6 +238,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   userAvatar = '🎓',
   participants = {},
   onBackToBoard,
+  onSendPlotToBoard,
 }) => {
   const [files, setFiles] = useState<CodeFile[]>(() => {
     try {
@@ -211,6 +263,18 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       return '';
     }
   });
+  const [plots, setPlots] = useState<CodePlot[]>(() => {
+    try {
+      const saved = localStorage.getItem(`tutorboard_ide_plots_${roomId}`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const [activePlotId, setActivePlotId] = useState<string>('');
+  const [showPlotViewer, setShowPlotViewer] = useState<boolean>(false);
+  const [copiedPlotId, setCopiedPlotId] = useState<string | null>(null);
+
   const [isRunning, setIsRunning] = useState<boolean>(false);
   const [otherCursors, setOtherCursors] = useState<Record<string, CodeCursor>>({});
   const [newFileName, setNewFileName] = useState<string>('');
@@ -244,7 +308,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     setIsMicMuted(nextMuted);
   };
 
-  // Persist files, activeFileId, and output
+  // Persist files, activeFileId, output, and plots
   useEffect(() => {
     try {
       localStorage.setItem(`tutorboard_ide_files_${roomId}`, JSON.stringify(files));
@@ -263,8 +327,14 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     } catch {}
   }, [output, roomId]);
 
-  // Terminal vs Output Console Tab Switcher State
-  const [activeBottomTab, setActiveBottomTab] = useState<'output' | 'terminal'>('output');
+  useEffect(() => {
+    try {
+      localStorage.setItem(`tutorboard_ide_plots_${roomId}`, JSON.stringify(plots));
+    } catch {}
+  }, [plots, roomId]);
+
+  // Terminal vs Output vs Plots Console Tab Switcher State
+  const [activeBottomTab, setActiveBottomTab] = useState<'output' | 'terminal' | 'plots'>('output');
   const [terminalLogs, setTerminalLogs] = useState<
     Array<{
       id: string;
@@ -330,7 +400,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       const res = await fetch('/api/terminal/exec', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ command: cmd }),
+        body: JSON.stringify({ command: cmd, timeout: timeoutSeconds }),
       });
       const data = await res.json();
       if (data.clear) {
@@ -659,6 +729,18 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     };
   };
 
+  // Configurable Execution Timeout (Tutor adjustable, synchronized to all participants)
+  const [timeoutSeconds, setTimeoutSeconds] = useState<number>(10);
+  const [showTimeoutDropdown, setShowTimeoutDropdown] = useState<boolean>(false);
+  const [customTimeoutInput, setCustomTimeoutInput] = useState<string>('');
+
+  const handleSetTimeout = (sec: number) => {
+    const cleanSec = Math.min(180, Math.max(1, Math.round(sec)));
+    setTimeoutSeconds(cleanSec);
+    setShowTimeoutDropdown(false);
+    getSocket().emit('ide:timeout:set', { timeoutSeconds: cleanSec });
+  };
+
   // Exact character width measurement for cursor placement
   const [charWidth, setCharWidth] = useState<number>(7.8);
   const [scrollPos, setScrollPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
@@ -678,18 +760,36 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
 
   const activeFile = files.find((f) => f.id === activeFileId) || files[0];
 
-  // Measure character width precisely on mount and window resize
+  // Measure character width precisely with both Canvas 2D and DOM node
   useEffect(() => {
     const updateCharWidth = () => {
+      let canvasW = 0;
+      try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (ctx) {
+          ctx.font = '13px "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
+          const sample = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz';
+          canvasW = ctx.measureText(sample).width / sample.length;
+        }
+      } catch {}
+
+      let domW = 0;
       if (charMeasureRef.current) {
-        const width = charMeasureRef.current.getBoundingClientRect().width / 100;
-        if (width > 0) {
-          setCharWidth(width);
+        const rect = charMeasureRef.current.getBoundingClientRect();
+        if (rect.width > 0) {
+          domW = rect.width / 100;
         }
       }
+
+      const finalW = domW > 0 ? domW : (canvasW > 0 ? canvasW : 7.8);
+      setCharWidth(finalW);
     };
 
     updateCharWidth();
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(updateCharWidth);
+    }
     window.addEventListener('resize', updateCharWidth);
     return () => window.removeEventListener('resize', updateCharWidth);
   }, []);
@@ -797,7 +897,12 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   useEffect(() => {
     const socket = getSocket();
 
-    const handleInitResponse = (data: { files?: CodeFile[]; cursors?: Record<string, CodeCursor> }) => {
+    const handleInitResponse = (data: {
+      files?: CodeFile[];
+      cursors?: Record<string, CodeCursor>;
+      timeoutSeconds?: number;
+      plots?: CodePlot[];
+    }) => {
       if (data.files && data.files.length > 0) {
         setFiles(data.files);
         setActiveFileId((prev) => {
@@ -807,6 +912,43 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       }
       if (data.cursors) {
         setOtherCursors(data.cursors);
+      }
+      if (typeof data.timeoutSeconds === 'number') {
+        setTimeoutSeconds(data.timeoutSeconds);
+      }
+      if (Array.isArray(data.plots) && data.plots.length > 0) {
+        setPlots(data.plots);
+        setActivePlotId(data.plots[0].id);
+      }
+    };
+
+    const handlePlotAdded = (data: { plot: CodePlot; senderName?: string }) => {
+      if (!data?.plot) return;
+      setPlots((prev) => {
+        const existingIdx = prev.findIndex((p) => p.id === data.plot.id);
+        if (existingIdx >= 0) {
+          const next = [...prev];
+          next[existingIdx] = data.plot;
+          return next;
+        }
+        return [...prev, data.plot];
+      });
+      setActivePlotId(data.plot.id);
+      setShowPlotViewer(true);
+    };
+
+    const handlePlotDeleted = (data: { plotId: string }) => {
+      setPlots((prev) => prev.filter((p) => p.id !== data.plotId));
+    };
+
+    const handlePlotCleared = () => {
+      setPlots([]);
+      setShowPlotViewer(false);
+    };
+
+    const handleTimeoutSynced = (data: { timeoutSeconds: number }) => {
+      if (typeof data?.timeoutSeconds === 'number') {
+        setTimeoutSeconds(data.timeoutSeconds);
       }
     };
 
@@ -1016,8 +1158,12 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     socket.on('ide:cursor:sync', handleCursorSync);
     socket.on('ide:cursor:removed', handleCursorRemoved);
     socket.on('ide:output:sync', handleOutputSync);
+    socket.on('ide:plot:added', handlePlotAdded);
+    socket.on('ide:plot:deleted', handlePlotDeleted);
+    socket.on('ide:plot:cleared', handlePlotCleared);
     socket.on('ide:mouse:moved', handleMouseMoved);
     socket.on('ide:mouse:left', handleMouseLeft);
+    socket.on('ide:timeout:synced', handleTimeoutSynced);
 
     socket.emit('ide:init:request');
 
@@ -1030,8 +1176,12 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       socket.off('ide:cursor:sync', handleCursorSync);
       socket.off('ide:cursor:removed', handleCursorRemoved);
       socket.off('ide:output:sync', handleOutputSync);
+      socket.off('ide:plot:added', handlePlotAdded);
+      socket.off('ide:plot:deleted', handlePlotDeleted);
+      socket.off('ide:plot:cleared', handlePlotCleared);
       socket.off('ide:mouse:moved', handleMouseMoved);
       socket.off('ide:mouse:left', handleMouseLeft);
+      socket.off('ide:timeout:synced', handleTimeoutSynced);
     };
   }, [activeFileId, myUserId]);
 
@@ -1411,6 +1561,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
         body: JSON.stringify({
           code: activeFile.content,
           language: activeFile.language,
+          timeout: timeoutSeconds,
         }),
       });
 
@@ -1422,6 +1573,24 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
         output: finalOutput,
         senderName: userName,
       });
+
+      // Handle generated plots (e.g. from matplotlib plt.show() or saved images)
+      if (Array.isArray(data.plots) && data.plots.length > 0) {
+        setPlots((prev) => {
+          const prevMap = new Map(prev.map((p) => [p.id, p]));
+          data.plots.forEach((p: CodePlot) => prevMap.set(p.id, p));
+          return Array.from(prevMap.values());
+        });
+
+        // Broadcast to all participants in room
+        data.plots.forEach((plot: CodePlot) => {
+          getSocket().emit('ide:plot:add', { plot });
+        });
+
+        // Automatically open the first generated plot in the floating viewer
+        setActivePlotId(data.plots[0].id);
+        setShowPlotViewer(true);
+      }
     } catch (err: any) {
       const errOutput = `[Ошибка выполнения]:\n${err.message || String(err)}`;
       setOutput(errOutput);
@@ -1431,6 +1600,71 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       });
     } finally {
       setIsRunning(false);
+    }
+  };
+
+  // Plot action helpers
+  const handleOpenPlot = (plotId: string) => {
+    setActivePlotId(plotId);
+    setShowPlotViewer(true);
+  };
+
+  const handleDeletePlot = (plotId: string, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    setPlots((prev) => prev.filter((p) => p.id !== plotId));
+    getSocket().emit('ide:plot:delete', { plotId });
+    if (activePlotId === plotId) {
+      const remaining = plots.filter((p) => p.id !== plotId);
+      if (remaining.length > 0) {
+        setActivePlotId(remaining[0].id);
+      } else {
+        setShowPlotViewer(false);
+      }
+    }
+  };
+
+  const handleClearPlots = () => {
+    setPlots([]);
+    setShowPlotViewer(false);
+    getSocket().emit('ide:plot:clear');
+  };
+
+  const handleCopyPlotImage = async (plot: CodePlot, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    try {
+      const res = await fetch(plot.dataUrl);
+      const blob = await res.blob();
+      if (navigator.clipboard && window.ClipboardItem) {
+        const item = new ClipboardItem({ [blob.type || 'image/png']: blob });
+        await navigator.clipboard.write([item]);
+      } else {
+        await navigator.clipboard.writeText(plot.dataUrl);
+      }
+      setCopiedPlotId(plot.id);
+      setTimeout(() => setCopiedPlotId(null), 2000);
+    } catch {
+      try {
+        await navigator.clipboard.writeText(plot.dataUrl);
+        setCopiedPlotId(plot.id);
+        setTimeout(() => setCopiedPlotId(null), 2000);
+      } catch {}
+    }
+  };
+
+  const handleDownloadPlot = (plot: CodePlot, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    const a = document.createElement('a');
+    a.href = plot.dataUrl;
+    a.download = plot.name || 'plot.png';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleSendPlotToWhiteboard = (plot: CodePlot, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (onSendPlotToBoard) {
+      onSendPlotToBoard({ name: plot.name, dataUrl: plot.dataUrl });
     }
   };
 
@@ -1462,18 +1696,6 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       id="tutorboard-ide"
       className="w-full h-full flex flex-col bg-slate-950 text-slate-200 select-none overflow-hidden font-sans"
     >
-      {/* Hidden character width measurement */}
-      <span
-        ref={charMeasureRef}
-        className="font-mono text-[13px] absolute opacity-0 pointer-events-none -z-50"
-        style={{
-          fontFamily:
-            'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
-        }}
-      >
-        0123456789
-      </span>
-
       {/* Top Header - Professional & Serious Dark VS Code Theme with Avatars */}
       <header className="h-11 bg-slate-950 border-b border-slate-800/90 px-3.5 flex items-center justify-between gap-3 shrink-0">
         {/* Left: Return to Whiteboard + Project Title */}
@@ -1528,8 +1750,100 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
           ))}
         </div>
 
-        {/* Right: Language Selector + Copy + Run */}
-        <div className="flex items-center gap-2">
+        {/* Right: Timeout Selector (Tutor control) + Language Selector + Copy + Run */}
+        <div className="flex items-center gap-2 relative">
+          {/* Configurable Timeout Button & Dropdown */}
+          <div className="relative">
+            {userRole === 'tutor' ? (
+              <button
+                onClick={() => setShowTimeoutDropdown((prev) => !prev)}
+                title="Настроить предельное время выполнения программ (лимит до прерывания)"
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1.5 border ${
+                  showTimeoutDropdown
+                    ? 'bg-amber-950/60 border-amber-500/70 text-amber-300'
+                    : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300 hover:text-white'
+                }`}
+              >
+                <Timer className="w-3.5 h-3.5 text-amber-400" />
+                <span className="font-mono">{timeoutSeconds}с</span>
+                <ChevronDown className="w-3 h-3 text-slate-400" />
+              </button>
+            ) : (
+              <div
+                title="Предельное время выполнения программ (управляется преподавателем)"
+                className="px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border bg-slate-900/80 border-slate-800 text-slate-400 cursor-default"
+              >
+                <Timer className="w-3.5 h-3.5 text-amber-400/80" />
+                <span className="font-mono">{timeoutSeconds}с</span>
+              </div>
+            )}
+
+            {/* Tutor Timeout Dropdown Menu */}
+            {showTimeoutDropdown && userRole === 'tutor' && (
+              <div className="absolute right-0 top-full mt-1.5 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-3 z-50 animate-in fade-in zoom-in-95 duration-100 font-sans">
+                <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs font-semibold text-slate-200">
+                  <div className="flex items-center gap-1.5">
+                    <Timer className="w-3.5 h-3.5 text-amber-400" />
+                    <span>Лимит времени (Тайм-аут)</span>
+                  </div>
+                  <span className="text-[10px] text-amber-400 font-mono font-bold bg-amber-950/70 border border-amber-800/50 px-1.5 py-0.5 rounded">
+                    {timeoutSeconds} сек
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-slate-400 mb-2.5 leading-relaxed">
+                  Программы, выполняющиеся дольше лимита (например, бесконечные циклы), будут автоматически остановлены.
+                </p>
+
+                {/* Quick Presets */}
+                <div className="grid grid-cols-4 gap-1 mb-3">
+                  {[3, 5, 10, 15, 30, 60, 90, 120].map((sec) => (
+                    <button
+                      key={sec}
+                      onClick={() => handleSetTimeout(sec)}
+                      className={`py-1 rounded-lg text-xs font-mono font-semibold transition border ${
+                        timeoutSeconds === sec
+                          ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-xs'
+                          : 'bg-slate-950 hover:bg-slate-800 border-slate-800 text-slate-300'
+                      }`}
+                    >
+                      {sec}с
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom seconds input */}
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    const val = parseInt(customTimeoutInput, 10);
+                    if (!isNaN(val) && val >= 1) {
+                      handleSetTimeout(val);
+                      setCustomTimeoutInput('');
+                    }
+                  }}
+                  className="flex items-center gap-1.5 pt-2 border-t border-slate-800/80"
+                >
+                  <input
+                    type="number"
+                    min="1"
+                    max="180"
+                    placeholder="Свой (сек)"
+                    value={customTimeoutInput}
+                    onChange={(e) => setCustomTimeoutInput(e.target.value)}
+                    className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
+                  />
+                  <button
+                    type="submit"
+                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold transition"
+                  >
+                    Задать
+                  </button>
+                </form>
+              </div>
+            )}
+          </div>
+
           <select
             value={activeFile?.language || 'python'}
             onChange={(e) => handleChangeLanguage(e.target.value)}
@@ -1622,6 +1936,90 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
               );
             })}
           </div>
+
+          {/* Left Sidebar Section 2: Generated Plots / Images */}
+          {plots.length > 0 && (
+            <div className="border-t border-slate-800/80 flex flex-col max-h-[48%] shrink-0 bg-slate-950/60">
+              <div className="h-8 px-3 bg-slate-900/60 flex items-center justify-between text-[11px] font-semibold text-amber-400 tracking-wide">
+                <span className="flex items-center gap-1.5">
+                  <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                  <span>Графики ({plots.length})</span>
+                </span>
+                <div className="flex items-center gap-1">
+                  <button
+                    onClick={handleClearPlots}
+                    title="Очистить все графики"
+                    className="p-1 hover:bg-slate-800 text-slate-400 hover:text-rose-400 rounded transition cursor-pointer"
+                  >
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="overflow-y-auto p-1.5 space-y-1 font-mono text-xs">
+                {plots.map((plot) => {
+                  const isCurrent = showPlotViewer && activePlotId === plot.id;
+                  return (
+                    <div
+                      key={plot.id}
+                      onClick={() => handleOpenPlot(plot.id)}
+                      className={`group p-1.5 rounded-lg cursor-pointer flex items-center justify-between transition border ${
+                        isCurrent
+                          ? 'bg-amber-950/40 text-amber-200 border-amber-500/60 shadow-xs'
+                          : 'bg-slate-900/70 hover:bg-slate-800/90 text-slate-300 border-slate-800/80 hover:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <img
+                          src={plot.dataUrl}
+                          alt={plot.name}
+                          className="w-6 h-6 rounded object-cover border border-slate-700 bg-white shrink-0"
+                        />
+                        <div className="flex flex-col min-w-0">
+                          <span className="truncate text-[11px] font-semibold text-white leading-tight">
+                            {plot.name}
+                          </span>
+                          <span className="text-[9px] text-slate-400">
+                            {plot.size ? `${Math.round(plot.size / 1024)} КБ` : 'График'}
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition">
+                        <button
+                          onClick={(e) => handleCopyPlotImage(plot, e)}
+                          title="Скопировать в буфер обмена"
+                          className="p-1 hover:bg-slate-700 text-slate-300 hover:text-white rounded transition"
+                        >
+                          {copiedPlotId === plot.id ? (
+                            <Check className="w-3 h-3 text-emerald-400" />
+                          ) : (
+                            <Copy className="w-3 h-3" />
+                          )}
+                        </button>
+                        {onSendPlotToBoard && (
+                          <button
+                            onClick={(e) => handleSendPlotToWhiteboard(plot, e)}
+                            title="Вставить на интерактивную доску"
+                            className="p-1 hover:bg-indigo-900/60 text-slate-300 hover:text-indigo-300 rounded transition"
+                          >
+                            <Layers className="w-3 h-3" />
+                          </button>
+                        )}
+                        <button
+                          onClick={(e) => handleDeletePlot(plot.id, e)}
+                          title="Удалить график"
+                          className="p-1 hover:bg-rose-900/60 text-slate-400 hover:text-rose-400 rounded transition"
+                        >
+                          <Trash2 className="w-3 h-3" />
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Left Sidebar Footer: Microphone Toggle Button + Quick shortcut info */}
           <div className="p-2 border-t border-slate-900 flex flex-col gap-2 bg-slate-950/80">
@@ -1758,14 +2156,13 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                     {boxes.map((box, bIdx) => (
                       <div
                         key={`sel-${c.userId}-${bIdx}`}
-                        className="absolute pointer-events-none transition-all duration-75 z-15 rounded-xs"
+                        className="absolute pointer-events-none transition-all duration-75 z-15 rounded-[2px]"
                         style={{
                           top: `${box.top}px`,
                           left: `${box.left}px`,
                           width: `${box.width}px`,
                           height: `${box.height}px`,
-                          backgroundColor: `${color}35`,
-                          border: `1px solid ${color}70`,
+                          backgroundColor: `${color}40`,
                         }}
                       />
                     ))}
@@ -1965,6 +2362,24 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                       <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
                     )}
                   </button>
+
+                  {/* Generated Plots Tab */}
+                  {plots.length > 0 && (
+                    <button
+                      onClick={() => setActiveBottomTab('plots')}
+                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                        activeBottomTab === 'plots'
+                          ? 'bg-amber-950/80 text-amber-300 border border-amber-500/50 shadow-xs'
+                          : 'text-amber-400/80 hover:text-amber-300 hover:bg-slate-900'
+                      }`}
+                    >
+                      <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Графики</span>
+                      <span className="px-1.5 py-0.2 bg-amber-500/20 text-amber-300 rounded text-[10px] font-mono font-bold">
+                        {plots.length}
+                      </span>
+                    </button>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2">
@@ -1976,13 +2391,21 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                     >
                       <RotateCcw className="w-3 h-3" /> Очистить
                     </button>
-                  ) : (
+                  ) : activeBottomTab === 'terminal' ? (
                     <button
                       onClick={() => setTerminalLogs([])}
                       title="Очистить терминал"
                       className="text-[11px] text-slate-400 hover:text-slate-200 transition flex items-center gap-1 font-medium px-2 py-0.5 rounded-md hover:bg-slate-900 cursor-pointer"
                     >
                       <RotateCcw className="w-3 h-3" /> Очистить
+                    </button>
+                  ) : (
+                    <button
+                      onClick={handleClearPlots}
+                      title="Очистить графики"
+                      className="text-[11px] text-slate-400 hover:text-rose-300 transition flex items-center gap-1 font-medium px-2 py-0.5 rounded-md hover:bg-slate-900 cursor-pointer"
+                    >
+                      <Trash2 className="w-3 h-3" /> Очистить все
                     </button>
                   )}
 
@@ -1999,17 +2422,54 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
 
               {/* Tab 1: Program Run Output */}
               {activeBottomTab === 'output' && (
-                <div className="flex-1 p-3 text-[12px] overflow-y-auto select-text text-emerald-400 whitespace-pre-wrap leading-relaxed">
-                  {output ? (
-                    output
-                  ) : (
-                    <div className="text-slate-600 flex flex-col gap-1">
-                      <span>Нажмите «Запустить» или Ctrl+Enter для выполнения программы...</span>
-                      <span className="text-[11px] text-slate-700">
-                        (Переключитесь на вкладку «Терминал», чтобы установить библиотеки через pip install)
-                      </span>
+                <div className="flex-1 p-3 text-[12px] overflow-y-auto select-text text-emerald-400 whitespace-pre-wrap leading-relaxed flex flex-col gap-3">
+                  {/* Quick Plots Banner in Output if plots exist */}
+                  {plots.length > 0 && (
+                    <div className="p-2.5 bg-slate-900/90 border border-amber-500/40 rounded-xl flex items-center justify-between gap-3 text-slate-200 shrink-0">
+                      <div className="flex items-center gap-2.5 min-w-0">
+                        <div className="p-1.5 bg-amber-500/10 text-amber-400 rounded-lg shrink-0">
+                          <ImageIcon className="w-4 h-4" />
+                        </div>
+                        <div className="truncate">
+                          <div className="font-semibold text-xs text-amber-300 flex items-center gap-1.5">
+                            <span>Сгенерировано графиков: {plots.length}</span>
+                          </div>
+                          <span className="text-[11px] text-slate-400 truncate block">
+                            Нажмите на график, чтобы раскрыть, переместить или скопировать
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => handleOpenPlot(plots[plots.length - 1].id)}
+                          className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold rounded-lg text-xs transition flex items-center gap-1 cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Открыть график</span>
+                        </button>
+                        <button
+                          onClick={() => setActiveBottomTab('plots')}
+                          className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-lg text-xs border border-slate-700 transition cursor-pointer"
+                        >
+                          Все графики
+                        </button>
+                      </div>
                     </div>
                   )}
+
+                  <div className="flex-1">
+                    {output ? (
+                      output
+                    ) : (
+                      <div className="text-slate-600 flex flex-col gap-1">
+                        <span>Нажмите «Запустить» или Ctrl+Enter для выполнения программы...</span>
+                        <span className="text-[11px] text-slate-700">
+                          (Переключитесь на вкладку «Терминал», чтобы установить библиотеки через pip install)
+                        </span>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
 
@@ -2102,6 +2562,103 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                   </div>
                 </div>
               )}
+
+              {/* Tab 3: Generated Plots Gallery Tab */}
+              {activeBottomTab === 'plots' && (
+                <div className="flex-1 p-3 bg-[#080d14] overflow-y-auto">
+                  {plots.length === 0 ? (
+                    <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-2 p-6 text-center">
+                      <ImageIcon className="w-8 h-8 text-slate-600" />
+                      <span className="text-xs">Графики еще не были созданы.</span>
+                      <span className="text-[11px] text-slate-600 font-mono">
+                        Запустите Python-код с matplotlib (plt.show() или plt.savefig('chart.png'))
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                      {plots.map((plot) => (
+                        <div
+                          key={plot.id}
+                          className="bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden shadow-lg flex flex-col group hover:border-amber-500/50 transition"
+                        >
+                          <div
+                            onClick={() => handleOpenPlot(plot.id)}
+                            className="relative aspect-[4/3] bg-white flex items-center justify-center p-2 cursor-pointer overflow-hidden"
+                          >
+                            <img
+                              src={plot.dataUrl}
+                              alt={plot.name}
+                              className="max-w-full max-h-full object-contain group-hover:scale-105 transition-transform"
+                            />
+                            <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition">
+                              <span className="px-2.5 py-1 bg-amber-500 text-slate-950 font-semibold text-[11px] rounded-lg shadow flex items-center gap-1">
+                                <Maximize2 className="w-3 h-3" /> Раскрыть
+                              </span>
+                            </div>
+                          </div>
+
+                          <div className="p-2.5 bg-slate-950/90 flex flex-col gap-1.5 border-t border-slate-800/80">
+                            <div className="flex items-center justify-between gap-1">
+                              <span className="font-mono text-xs font-semibold text-white truncate">
+                                {plot.name}
+                              </span>
+                              <span className="text-[10px] text-slate-400 font-mono">
+                                {plot.size ? `${Math.round(plot.size / 1024)} КБ` : ''}
+                              </span>
+                            </div>
+
+                            <div className="flex items-center gap-1 pt-1 border-t border-slate-800/60">
+                              <button
+                                onClick={(e) => handleCopyPlotImage(plot, e)}
+                                title="Скопировать изображение"
+                                className="flex-1 py-1 px-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg text-[11px] font-medium border border-slate-800 transition flex items-center justify-center gap-1 cursor-pointer"
+                              >
+                                {copiedPlotId === plot.id ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                    <span className="text-emerald-400">Скопировано</span>
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    <span>Копировать</span>
+                                  </>
+                                )}
+                              </button>
+
+                              {onSendPlotToBoard && (
+                                <button
+                                  onClick={(e) => handleSendPlotToWhiteboard(plot, e)}
+                                  title="Вставить на интерактивную доску"
+                                  className="p-1 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-800/60 rounded-lg text-[11px] transition cursor-pointer"
+                                >
+                                  <Layers className="w-3.5 h-3.5" />
+                                </button>
+                              )}
+
+                              <button
+                                onClick={(e) => handleDownloadPlot(plot, e)}
+                                title="Скачать файл PNG"
+                                className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-lg text-[11px] transition cursor-pointer"
+                              >
+                                <Download className="w-3.5 h-3.5" />
+                              </button>
+
+                              <button
+                                onClick={(e) => handleDeletePlot(plot.id, e)}
+                                title="Удалить"
+                                className="p-1 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 rounded-lg text-[11px] transition cursor-pointer"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </main>
@@ -2176,6 +2733,22 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       >
         0123456789
       </span>
+
+      {/* Floating Interactive Plot Viewer Window (Draggable, Zoomable, Copyable, Export to Board) */}
+      {showPlotViewer && plots.length > 0 && (
+        <FloatingPlotViewer
+          plots={plots}
+          activePlotId={activePlotId || plots[0].id}
+          onSelectPlot={(id) => setActivePlotId(id)}
+          onClose={() => setShowPlotViewer(false)}
+          onDeletePlot={handleDeletePlot}
+          onSendToWhiteboard={
+            onSendPlotToBoard
+              ? (plot) => onSendPlotToBoard({ name: plot.name, dataUrl: plot.dataUrl })
+              : undefined
+          }
+        />
+      )}
     </div>
   );
 };

@@ -75,6 +75,15 @@ interface RoomData {
     };
   };
   ideFiles?: CodeFileRecord[];
+  idePlots?: Array<{
+    id: string;
+    name: string;
+    dataUrl: string;
+    size?: number;
+    createdAt: number;
+    createdBy?: string;
+  }>;
+  ideTimeoutSeconds?: number;
   ideCursors?: {
     [socketId: string]: {
       userId: string;
@@ -552,23 +561,82 @@ async function startServer() {
 
   // Code execution endpoint for collaborative IDE
   app.post('/api/code/run', async (req, res) => {
-    const { code, language } = req.body;
+    const { code, language, timeout } = req.body;
     if (!code || typeof code !== 'string') {
       return res.status(400).json({ output: 'Код пуст для выполнения' });
     }
 
     const cleanLang = String(language || 'python').toLowerCase();
+    const timeoutSec = Math.min(180, Math.max(1, Number(timeout) || 10));
+    const timeoutMs = timeoutSec * 1000;
 
-    // 1. Python 3 Execution
+    // 1. Python 3 Execution (with automatic Matplotlib / Plotting capture)
     if (cleanLang === 'python') {
       try {
-        const tempDir = os.tmpdir();
-        const scriptPath = path.join(tempDir, `py_${Date.now()}_${Math.random().toString(36).substring(2, 6)}.py`);
-        fs.writeFileSync(scriptPath, code, 'utf8');
+        const runDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ide_py_'));
+        const scriptPath = path.join(runDir, `script_${Date.now()}.py`);
+
+        // Intercept and auto-save Matplotlib / Seaborn plots
+        const pythonWrapper = `import os, sys, atexit
+
+# Auto-capture Matplotlib figures for collaborative web IDE
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    _plot_count = 0
+
+    def _ide_custom_show(*args, **kwargs):
+        global _plot_count
+        try:
+            fignums = plt.get_fignums()
+            if fignums:
+                for num in fignums:
+                    _plot_count += 1
+                    fig = plt.figure(num)
+                    fig.savefig(f"plot_{_plot_count}.png", bbox_inches='tight', dpi=140)
+                plt.close('all')
+            else:
+                _plot_count += 1
+                plt.savefig(f"plot_{_plot_count}.png", bbox_inches='tight', dpi=140)
+                plt.close('all')
+        except Exception:
+            pass
+
+    plt.show = _ide_custom_show
+
+    def _ide_auto_save_remaining():
+        global _plot_count
+        try:
+            fignums = plt.get_fignums()
+            for num in fignums:
+                _plot_count += 1
+                fig = plt.figure(num)
+                fig.savefig(f"plot_{_plot_count}.png", bbox_inches='tight', dpi=140)
+            plt.close('all')
+        except Exception:
+            pass
+
+    atexit.register(_ide_auto_save_remaining)
+except Exception:
+    pass
+
+# --- User Code ---
+${code}
+`;
+        fs.writeFileSync(scriptPath, pythonWrapper, 'utf8');
 
         // Try python3 or python
         const pythonBin = process.platform === 'win32' ? 'python' : 'python3';
-        const child = spawn(pythonBin, [scriptPath]);
+        const child = spawn(pythonBin, [scriptPath], {
+          cwd: runDir,
+          env: {
+            ...process.env,
+            MPLBACKEND: 'Agg',
+            PYTHONUNBUFFERED: '1',
+            PIP_BREAK_SYSTEM_PACKAGES: '1',
+          },
+        });
 
         let stdout = '';
         let stderr = '';
@@ -579,7 +647,7 @@ async function startServer() {
           try {
             child.kill();
           } catch {}
-        }, 7000);
+        }, timeoutMs);
 
         child.stdout.on('data', (d) => {
           if (stdout.length < 50000) stdout += d.toString();
@@ -590,14 +658,44 @@ async function startServer() {
 
         child.on('close', (exitCode) => {
           clearTimeout(timer);
+
+          // Scan runDir for generated image files (.png, .jpg, .jpeg, .svg, .webp)
+          const plots: Array<{ id: string; name: string; dataUrl: string; size: number; createdAt: number }> = [];
           try {
-            if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
+            if (fs.existsSync(runDir)) {
+              const files = fs.readdirSync(runDir);
+              for (const f of files) {
+                const ext = path.extname(f).toLowerCase();
+                if (['.png', '.jpg', '.jpeg', '.svg', '.webp', '.gif'].includes(ext)) {
+                  const filePath = path.join(runDir, f);
+                  const stat = fs.statSync(filePath);
+                  const buf = fs.readFileSync(filePath);
+                  const mime = ext === '.svg' ? 'image/svg+xml' : ext === '.jpg' || ext === '.jpeg' ? 'image/jpeg' : `image/${ext.replace('.', '')}`;
+                  plots.push({
+                    id: `plot-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+                    name: f,
+                    dataUrl: `data:${mime};base64,${buf.toString('base64')}`,
+                    size: stat.size,
+                    createdAt: Date.now(),
+                  });
+                }
+              }
+            }
+          } catch (scanErr) {
+            console.error('Error scanning for plots:', scanErr);
+          }
+
+          try {
+            if (fs.existsSync(runDir)) {
+              fs.rmSync(runDir, { recursive: true, force: true });
+            }
           } catch {}
 
           if (killed) {
             return res.json({
-              output: '⚠️ Время выполнения превышено (лимит 7 сек).\nПроверьте код на наличие бесконечных циклов.',
+              output: `⚠️ Время выполнения превышено (лимит ${timeoutSec} сек).\nПроверьте код на наличие бесконечных циклов или увеличьте лимит времени выполнения.`,
               exitCode: -1,
+              plots,
             });
           }
 
@@ -605,21 +703,23 @@ async function startServer() {
           return res.json({
             output: combined || '✓ Программа успешно выполнена (вывод пуст)',
             exitCode,
+            plots,
           });
         });
 
         child.on('error', (err) => {
           clearTimeout(timer);
           try {
-            if (fs.existsSync(scriptPath)) fs.unlinkSync(scriptPath);
+            if (fs.existsSync(runDir)) fs.rmSync(runDir, { recursive: true, force: true });
           } catch {}
           return res.json({
             output: `Ошибка вызова интерпретатора Python: ${err.message}`,
             exitCode: -1,
+            plots: [],
           });
         });
       } catch (e: any) {
-        return res.json({ output: `Ошибка запуска: ${e.message}`, exitCode: -1 });
+        return res.json({ output: `Ошибка запуска: ${e.message}`, exitCode: -1, plots: [] });
       }
     }
     // 2. JavaScript / TypeScript Execution via Node.js
@@ -639,7 +739,7 @@ async function startServer() {
           try {
             child.kill();
           } catch {}
-        }, 7000);
+        }, timeoutMs);
 
         child.stdout.on('data', (d) => {
           if (stdout.length < 50000) stdout += d.toString();
@@ -656,7 +756,7 @@ async function startServer() {
 
           if (killed) {
             return res.json({
-              output: '⚠️ Время выполнения превышено (лимит 7 сек).',
+              output: `⚠️ Время выполнения превышено (лимит ${timeoutSec} сек).\nПроверьте код на наличие бесконечных циклов или увеличьте лимит времени выполнения.`,
               exitCode: -1,
             });
           }
@@ -720,7 +820,7 @@ async function startServer() {
             try {
               runChild.kill();
             } catch {}
-          }, 5000);
+          }, timeoutMs);
 
           runChild.stdout.on('data', (d) => {
             if (runOut.length < 50000) runOut += d.toString();
@@ -738,7 +838,7 @@ async function startServer() {
 
             if (killed) {
               return res.json({
-                output: '⚠️ Время выполнения C++ превышено (лимит 5 сек).',
+                output: `⚠️ Время выполнения C++ превышено (лимит ${timeoutSec} сек).`,
                 exitCode: -1,
               });
             }
@@ -784,7 +884,7 @@ async function startServer() {
 
   // Interactive Terminal execution endpoint (runs real bash/shell commands, pip install, python, npm, etc.)
   app.post('/api/terminal/exec', async (req, res) => {
-    const { command, cwd } = req.body;
+    const { command, cwd, timeout } = req.body;
     if (!command || typeof command !== 'string') {
       return res.status(400).json({ output: 'Команда не указана', exitCode: 1 });
     }
@@ -819,13 +919,14 @@ async function startServer() {
       let stderr = '';
       let killed = false;
 
-      // Generous timeout for pip/npm installs (90 seconds)
+      // Generous timeout for pip/npm installs (90-180 seconds), otherwise based on custom timeout or 30s
       const isLongRunning =
         trimmed.startsWith('pip') ||
         trimmed.startsWith('npm') ||
         trimmed.startsWith('apt') ||
         trimmed.includes('install');
-      const timeoutMs = isLongRunning ? 90000 : 30000;
+      const baseTimeout = isLongRunning ? 120000 : 30000;
+      const timeoutMs = timeout ? Math.min(300000, Math.max(3000, Number(timeout) * 1000)) : baseTimeout;
 
       const timer = setTimeout(() => {
         killed = true;
@@ -1963,7 +2064,59 @@ async function startServer() {
       socket.emit('ide:init:response', {
         files: room.ideFiles,
         cursors: room.ideCursors || {},
+        timeoutSeconds: room.ideTimeoutSeconds || 10,
+        plots: room.idePlots || [],
       });
+    });
+
+    socket.on('ide:plot:add', (data: { plot: any }) => {
+      if (!currentRoomId || !rooms[currentRoomId] || !data.plot) return;
+      const room = rooms[currentRoomId];
+      if (!room.idePlots) room.idePlots = [];
+      // Avoid duplicate by id
+      const existingIdx = room.idePlots.findIndex((p) => p.id === data.plot.id);
+      if (existingIdx >= 0) {
+        room.idePlots[existingIdx] = data.plot;
+      } else {
+        room.idePlots.push(data.plot);
+      }
+      // Cap at 50 plots to avoid memory bloat
+      if (room.idePlots.length > 50) {
+        room.idePlots = room.idePlots.slice(-50);
+      }
+      scheduleSave();
+      io.to(currentRoomId).emit('ide:plot:added', {
+        plot: data.plot,
+        senderName: currentUser?.name || 'Участник',
+      });
+    });
+
+    socket.on('ide:plot:delete', (data: { plotId: string }) => {
+      if (!currentRoomId || !rooms[currentRoomId] || !data.plotId) return;
+      const room = rooms[currentRoomId];
+      if (room.idePlots) {
+        room.idePlots = room.idePlots.filter((p) => p.id !== data.plotId);
+        scheduleSave();
+      }
+      io.to(currentRoomId).emit('ide:plot:deleted', { plotId: data.plotId });
+    });
+
+    socket.on('ide:plot:clear', () => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      room.idePlots = [];
+      scheduleSave();
+      io.to(currentRoomId).emit('ide:plot:cleared');
+    });
+
+    socket.on('ide:timeout:set', (data: { timeoutSeconds: number }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      if (currentUser?.role !== 'tutor') return;
+      const sec = Math.min(180, Math.max(1, Number(data.timeoutSeconds) || 10));
+      room.ideTimeoutSeconds = sec;
+      scheduleSave();
+      io.to(currentRoomId).emit('ide:timeout:synced', { timeoutSeconds: sec });
     });
 
     socket.on('ide:mouse:move', (data: { x: number; y: number; userName?: string; color?: string; avatar?: string; role?: string }) => {

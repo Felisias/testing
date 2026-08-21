@@ -76,6 +76,20 @@
   font-style: italic;
 }
 
+/* Unified pixel-exact font styling for dual-layer code editor & measurement */
+.code-editor-textarea,
+.code-editor-pre,
+.code-font-measure {
+  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  font-size: 13px !important;
+  line-height: 24px !important;
+  letter-spacing: 0px !important;
+  word-spacing: 0px !important;
+  tab-size: 4 !important;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
 /* Custom transparent text selection for dual-layer syntax highlighter */
 .code-editor-textarea {
   color: transparent !important;
@@ -83,11 +97,11 @@
 }
 
 .code-editor-textarea::selection {
-  background-color: rgba(59, 130, 246, 0.4) !important;
+  background-color: rgba(59, 130, 246, 0.38) !important;
   color: transparent !important;
 }
 
 .code-editor-textarea::-moz-selection {
-  background-color: rgba(59, 130, 246, 0.4) !important;
+  background-color: rgba(59, 130, 246, 0.38) !important;
   color: transparent !important;
 }
