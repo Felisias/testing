@@ -373,15 +373,7 @@ function getOrCreateRoom(roomId: string, title?: string, subject?: string): Room
         id: 'main-py',
         name: 'main.py',
         language: 'python',
-        content: `# main.py
-
-def main():
-    print("Привет! Добро пожаловать в совместную среду разработки.")
-    print("Вы можете писать код вместе с преподавателем в реальном времени!")
-
-if __name__ == "__main__":
-    main()
-`,
+        content: 'print("Hello, World!")\n',
       },
     ],
     ideCursors: {},
@@ -787,6 +779,94 @@ async function startServer() {
         output: `✓ Файл ${cleanLang.toUpperCase()} проверен. Синтаксис готов.`,
         exitCode: 0,
       });
+    }
+  });
+
+  // Interactive Terminal execution endpoint (runs real bash/shell commands, pip install, python, npm, etc.)
+  app.post('/api/terminal/exec', async (req, res) => {
+    const { command, cwd } = req.body;
+    if (!command || typeof command !== 'string') {
+      return res.status(400).json({ output: 'Команда не указана', exitCode: 1 });
+    }
+
+    const trimmed = command.trim();
+    if (!trimmed) {
+      return res.json({ output: '', exitCode: 0 });
+    }
+
+    // Handle clear builtin
+    if (trimmed === 'clear' || trimmed === 'cls') {
+      return res.json({ output: '', clear: true, exitCode: 0 });
+    }
+
+    try {
+      const workDir = cwd || process.cwd();
+      const shell = process.platform === 'win32' ? 'cmd.exe' : '/bin/bash';
+      const shellArgs = process.platform === 'win32' ? ['/c', trimmed] : ['-c', trimmed];
+
+      const child = spawn(shell, shellArgs, {
+        cwd: workDir,
+        env: {
+          ...process.env,
+          PIP_BREAK_SYSTEM_PACKAGES: '1',
+          PYTHONUNBUFFERED: '1',
+          TERM: 'xterm-256color',
+          PATH: `/usr/local/bin:/usr/bin:/bin:${process.env.PATH || ''}`,
+        },
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let killed = false;
+
+      // Generous timeout for pip/npm installs (90 seconds)
+      const isLongRunning =
+        trimmed.startsWith('pip') ||
+        trimmed.startsWith('npm') ||
+        trimmed.startsWith('apt') ||
+        trimmed.includes('install');
+      const timeoutMs = isLongRunning ? 90000 : 30000;
+
+      const timer = setTimeout(() => {
+        killed = true;
+        try {
+          child.kill('SIGKILL');
+        } catch {}
+      }, timeoutMs);
+
+      child.stdout.on('data', (d) => {
+        if (stdout.length < 300000) stdout += d.toString();
+      });
+
+      child.stderr.on('data', (d) => {
+        if (stderr.length < 300000) stderr += d.toString();
+      });
+
+      child.on('close', (exitCode) => {
+        clearTimeout(timer);
+        if (killed) {
+          return res.json({
+            output: `⚠️ Превышено время выполнения (${Math.round(timeoutMs / 1000)}с). Процесс остановлен.`,
+            exitCode: -1,
+          });
+        }
+
+        const combined = stdout + (stderr ? (stdout ? '\n' : '') + stderr : '');
+        return res.json({
+          output: combined || (exitCode === 0 ? '✓ Команда выполнена без вывода' : `Процесс завершился с кодом ${exitCode}`),
+          exitCode: exitCode ?? 0,
+        });
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        return res.json({
+          output: `Ошибка запуска оболочки: ${err.message}`,
+          exitCode: -1,
+        });
+      });
+    } catch (e: any) {
+      return res.json({ output: `Ошибка выполнения: ${e.message}`, exitCode: -1 });
     }
   });
 
@@ -1876,7 +1956,7 @@ async function startServer() {
             id: 'main-py',
             name: 'main.py',
             language: 'python',
-            content: `# main.py\n\ndef main():\n    print("Привет! Добро пожаловать в совместную среду разработки.")\n    print("Вы можете писать код вместе с преподавателем в реальном времени!")\n\nif __name__ == "__main__":\n    main()\n`,
+            content: 'print("Hello, World!")\n',
           },
         ];
       }
@@ -1884,6 +1964,24 @@ async function startServer() {
         files: room.ideFiles,
         cursors: room.ideCursors || {},
       });
+    });
+
+    socket.on('ide:mouse:move', (data: { x: number; y: number; userName?: string; color?: string; avatar?: string; role?: string }) => {
+      if (!currentRoomId) return;
+      socket.to(currentRoomId).emit('ide:mouse:moved', {
+        ...data,
+        userId: socket.id,
+        userName: currentUser?.name || data.userName || 'Участник',
+        color: currentUser?.color || data.color || '#3b82f6',
+        avatar: currentUser?.avatar || data.avatar || '👤',
+        role: currentUser?.role || data.role,
+        updatedAt: Date.now(),
+      });
+    });
+
+    socket.on('ide:mouse:leave', () => {
+      if (!currentRoomId) return;
+      socket.to(currentRoomId).emit('ide:mouse:left', { userId: socket.id });
     });
 
     socket.on(
@@ -2001,6 +2099,7 @@ async function startServer() {
           delete room.ideCursors[socket.id];
           io.to(currentRoomId).emit('ide:cursor:removed', { userId: socket.id });
         }
+        io.to(currentRoomId).emit('ide:mouse:left', { userId: socket.id });
 
         const leaveMsg: ChatMessage = {
           id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,

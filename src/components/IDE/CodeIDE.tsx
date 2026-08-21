@@ -39,6 +39,11 @@ import {
   ArrowUpRight,
   Mic,
   MicOff,
+  Box,
+  Download,
+  AlertCircle,
+  CheckCircle2,
+  Command,
 } from 'lucide-react';
 
 interface CodeIDEProps {
@@ -57,14 +62,7 @@ const DEFAULT_FILES: CodeFile[] = [
     id: 'main-py',
     name: 'main.py',
     language: 'python',
-    content: `# main.py
-
-def main():
-    print("Привет из main.py!")
-
-if __name__ == "__main__":
-    main()
-`,
+    content: 'print("Hello, World!")\n',
   },
 ];
 
@@ -132,11 +130,12 @@ function calculateSelectionBoxes(
   } else {
     for (let l = startLine; l <= endLine; l++) {
       const top = (l - 1) * LINE_HEIGHT + PADDING_TOP - scrollPos.top;
-      const lineLen = (lines[l - 1] || '').length + 1;
+      const lineLen = (lines[l - 1] || '').length;
 
       if (l === startLine) {
         const left = (startCol - 1) * charWidth + PADDING_LEFT - scrollPos.left;
-        const width = Math.max(charWidth, (lineLen - startCol + 1) * charWidth);
+        const charCount = Math.max(1, lineLen - (startCol - 1) + 0.5);
+        const width = Math.max(charWidth, charCount * charWidth);
         boxes.push({ top, left, width, height: LINE_HEIGHT });
       } else if (l === endLine) {
         const left = PADDING_LEFT - scrollPos.left;
@@ -144,7 +143,7 @@ function calculateSelectionBoxes(
         boxes.push({ top, left, width, height: LINE_HEIGHT });
       } else {
         const left = PADDING_LEFT - scrollPos.left;
-        const width = Math.max(charWidth * 2, lineLen * charWidth);
+        const width = Math.max(charWidth * 2, (lineLen + 0.5) * charWidth);
         boxes.push({ top, left, width, height: LINE_HEIGHT });
       }
     }
@@ -264,20 +263,172 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     } catch {}
   }, [output, roomId]);
 
+  // Terminal vs Output Console Tab Switcher State
+  const [activeBottomTab, setActiveBottomTab] = useState<'output' | 'terminal'>('output');
+  const [terminalLogs, setTerminalLogs] = useState<
+    Array<{
+      id: string;
+      cmd: string;
+      output: string;
+      exitCode: number;
+      time: string;
+    }>
+  >([
+    {
+      id: 'init-1',
+      cmd: 'python3 --version && pip --version',
+      output: 'Python 3.10.12\npip 23.0.1 (готов к установке пакетов через pip install <name>)',
+      exitCode: 0,
+      time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }),
+    },
+  ]);
+  const [terminalInput, setTerminalInput] = useState<string>('');
+  const [isTerminalExecuting, setIsTerminalExecuting] = useState<boolean>(false);
+  const [terminalHistory, setTerminalHistory] = useState<string[]>([]);
+  const [historyPointer, setHistoryPointer] = useState<number>(-1);
+  const terminalScrollRef = useRef<HTMLDivElement>(null);
+  const terminalInputRef = useRef<HTMLInputElement>(null);
+
+  // Mouse cursors in IDE
+  const [otherMouseCursors, setOtherMouseCursors] = useState<
+    Record<
+      string,
+      {
+        userId: string;
+        x: number;
+        y: number;
+        userName: string;
+        color: string;
+        avatar?: string;
+        role?: string;
+        lastActive: number;
+      }
+    >
+  >({});
+  const editorContainerRef = useRef<HTMLDivElement>(null);
+  const lastMouseMoveTimeRef = useRef<number>(0);
+
+  // Execute terminal command on live server
+  const handleExecuteTerminalCommand = async (customCmd?: string) => {
+    const rawCmd = customCmd !== undefined ? customCmd : terminalInput;
+    const cmd = rawCmd.trim();
+    if (!cmd || isTerminalExecuting) return;
+
+    setTerminalInput('');
+    setTerminalHistory((prev) => [cmd, ...prev.filter((c) => c !== cmd)]);
+    setHistoryPointer(-1);
+
+    if (cmd === 'clear' || cmd === 'cls') {
+      setTerminalLogs([]);
+      return;
+    }
+
+    setIsTerminalExecuting(true);
+    const timeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+
+    try {
+      const res = await fetch('/api/terminal/exec', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ command: cmd }),
+      });
+      const data = await res.json();
+      if (data.clear) {
+        setTerminalLogs([]);
+      } else {
+        setTerminalLogs((prev) => [
+          ...prev,
+          {
+            id: `cmd-${Date.now()}-${Math.random().toString(36).substr(2, 4)}`,
+            cmd,
+            output: data.output || '',
+            exitCode: data.exitCode ?? 0,
+            time: timeStr,
+          },
+        ]);
+      }
+    } catch (err: any) {
+      setTerminalLogs((prev) => [
+        ...prev,
+        {
+          id: `cmd-${Date.now()}`,
+          cmd,
+          output: `Сетевая ошибка выполнения команды: ${err.message}`,
+          exitCode: -1,
+          time: timeStr,
+        },
+      ]);
+    } finally {
+      setIsTerminalExecuting(false);
+      setTimeout(() => {
+        if (terminalScrollRef.current) {
+          terminalScrollRef.current.scrollTop = terminalScrollRef.current.scrollHeight;
+        }
+      }, 50);
+    }
+  };
+
+  const handleTerminalKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      handleExecuteTerminalCommand();
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (terminalHistory.length === 0) return;
+      const nextPtr = Math.min(terminalHistory.length - 1, historyPointer + 1);
+      setHistoryPointer(nextPtr);
+      setTerminalInput(terminalHistory[nextPtr] || '');
+    } else if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (historyPointer <= 0) {
+        setHistoryPointer(-1);
+        setTerminalInput('');
+      } else {
+        const nextPtr = historyPointer - 1;
+        setHistoryPointer(nextPtr);
+        setTerminalInput(terminalHistory[nextPtr] || '');
+      }
+    }
+  };
+
+  const handleEditorMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!editorContainerRef.current) return;
+    const now = Date.now();
+    if (now - lastMouseMoveTimeRef.current < 45) return;
+    lastMouseMoveTimeRef.current = now;
+
+    const rect = editorContainerRef.current.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    getSocket().emit('ide:mouse:move', {
+      x,
+      y,
+      userName,
+      color: userColor,
+      avatar: userAvatar,
+      role: userRole,
+    });
+  };
+
+  const handleEditorMouseLeave = () => {
+    getSocket().emit('ide:mouse:leave');
+  };
+
   // Terminal Resizing & Popout Window states
   const [terminalHeight, setTerminalHeight] = useState<number>(() => {
     try {
       const saved = localStorage.getItem('tutorboard_terminal_height');
-      return saved ? Math.max(70, Math.min(600, parseInt(saved, 10))) : 190;
+      return saved ? Math.max(70, Math.min(600, parseInt(saved, 10))) : 210;
     } catch {
-      return 190;
+      return 210;
     }
   });
   const [isResizingTerminal, setIsResizingTerminal] = useState<boolean>(false);
   const [isTerminalPoppedOut, setIsTerminalPoppedOut] = useState<boolean>(false);
   const popoutWindowRef = useRef<Window | null>(null);
   const resizeStartYRef = useRef<number>(0);
-  const resizeStartHeightRef = useRef<number>(190);
+  const resizeStartHeightRef = useRef<number>(210);
 
   // Sync output to popout window
   useEffect(() => {
@@ -531,7 +682,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   useEffect(() => {
     const updateCharWidth = () => {
       if (charMeasureRef.current) {
-        const width = charMeasureRef.current.getBoundingClientRect().width / 10;
+        const width = charMeasureRef.current.getBoundingClientRect().width / 100;
         if (width > 0) {
           setCharWidth(width);
         }
@@ -830,6 +981,33 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       setOutput(data.output);
     };
 
+    const handleMouseMoved = (data: {
+      userId: string;
+      x: number;
+      y: number;
+      userName: string;
+      color: string;
+      avatar?: string;
+      role?: string;
+    }) => {
+      if (data.userId === myUserId || (socket.id && data.userId === socket.id)) return;
+      setOtherMouseCursors((prev) => ({
+        ...prev,
+        [data.userId]: {
+          ...data,
+          lastActive: Date.now(),
+        },
+      }));
+    };
+
+    const handleMouseLeft = (data: { userId: string }) => {
+      setOtherMouseCursors((prev) => {
+        const next = { ...prev };
+        delete next[data.userId];
+        return next;
+      });
+    };
+
     socket.on('ide:init:response', handleInitResponse);
     socket.on('ide:code:patch', handleCodePatch);
     socket.on('ide:code:sync', handleCodeSync);
@@ -838,6 +1016,8 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     socket.on('ide:cursor:sync', handleCursorSync);
     socket.on('ide:cursor:removed', handleCursorRemoved);
     socket.on('ide:output:sync', handleOutputSync);
+    socket.on('ide:mouse:moved', handleMouseMoved);
+    socket.on('ide:mouse:left', handleMouseLeft);
 
     socket.emit('ide:init:request');
 
@@ -850,6 +1030,8 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       socket.off('ide:cursor:sync', handleCursorSync);
       socket.off('ide:cursor:removed', handleCursorRemoved);
       socket.off('ide:output:sync', handleOutputSync);
+      socket.off('ide:mouse:moved', handleMouseMoved);
+      socket.off('ide:mouse:left', handleMouseLeft);
     };
   }, [activeFileId, myUserId]);
 
@@ -1513,7 +1695,12 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
             </div>
 
             {/* Code Editor Container: Syntax Highlighted Layer (Background) + Input Layer (Foreground) */}
-            <div className="flex-1 relative overflow-hidden">
+            <div
+              ref={editorContainerRef}
+              onMouseMove={handleEditorMouseMove}
+              onMouseLeave={handleEditorMouseLeave}
+              className="flex-1 relative overflow-hidden"
+            >
               {/* Syntax Highlighted Background Layer */}
               <pre
                 ref={preRef}
@@ -1586,7 +1773,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                 );
               })}
 
-              {/* Hidden Char Width Measurement Node */}
+              {/* Hidden Char Width Measurement Node (High precision 100 chars) */}
               <span
                 ref={charMeasureRef}
                 aria-hidden="true"
@@ -1596,10 +1783,10 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                     'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
                 }}
               >
-                0123456789
+                {'0123456789'.repeat(10)}
               </span>
 
-              {/* Pixel-Accurate Remote Cursors Overlay with clear participant badge */}
+              {/* Pixel-Accurate Remote Carets Overlay (Clean Caret Bar, no distracting labels) */}
               {(Object.values(otherCursors) as CodeCursor[]).map((c) => {
                 if (
                   c.fileId &&
@@ -1626,7 +1813,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                   <div
                     key={`cur-${c.userId}`}
                     className={`absolute pointer-events-none transition-all duration-75 z-20 ${
-                      isInactive ? 'opacity-50' : 'opacity-100'
+                      isInactive ? 'opacity-40' : 'opacity-100'
                     }`}
                     style={{
                       top: `${topPos}px`,
@@ -1641,14 +1828,49 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                         boxShadow: `0 0 8px ${color}90`,
                       }}
                     />
-                    {/* Visible participant name badge */}
-                    <div
-                      className="absolute -top-4.5 left-0 text-[10px] font-sans font-medium px-1.5 py-0.2 rounded shadow-xs whitespace-nowrap select-none text-white pointer-events-none flex items-center gap-1 opacity-90 transition-opacity"
+                  </div>
+                );
+              })}
+
+              {/* Remote Mouse Cursors Overlay (Board style with pointer + avatar and name badge) */}
+              {(Object.values(otherMouseCursors) as Array<{
+                userId: string;
+                x: number;
+                y: number;
+                userName: string;
+                color: string;
+                avatar?: string;
+                role?: string;
+                lastActive: number;
+              }>).map((mCur) => {
+                const isInactive = currentTime - mCur.lastActive > 4000;
+                if (isInactive) return null;
+                const color = getDistinctRemoteColor(mCur.color, userColor, mCur.userId);
+
+                return (
+                  <div
+                    key={`mcur-${mCur.userId}`}
+                    className="absolute pointer-events-none transition-all duration-75 flex items-start gap-1 z-35 select-none"
+                    style={{
+                      transform: `translate(${mCur.x}px, ${mCur.y}px)`,
+                    }}
+                  >
+                    <svg
+                      className="w-4 h-4 drop-shadow-md"
+                      viewBox="0 0 24 24"
+                      fill={color}
+                      stroke="#FFFFFF"
+                      strokeWidth="1.5"
+                    >
+                      <path d="M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86a.5.5 0 0 1 .35-.15h6.87a.5.5 0 0 0 .35-.85L6.35 2.86a.5.5 0 0 0-.85.35Z" />
+                    </svg>
+                    <span
+                      className="px-2 py-0.5 rounded-lg text-[11px] font-semibold text-white shadow-md whitespace-nowrap flex items-center gap-1"
                       style={{ backgroundColor: color }}
                     >
-                      <span className="text-[9px]">{c.avatar || '👤'}</span>
-                      <span>{c.userName}</span>
-                    </div>
+                      <span>{mCur.avatar || (mCur.role === 'tutor' ? '👨‍🏫' : '🎓')}</span>
+                      <span>{mCur.userName}</span>
+                    </span>
                   </div>
                 );
               })}
@@ -1666,7 +1888,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
             </div>
           </div>
 
-          {/* Bottom Split: Terminal Console with Drag Resizer & Popout Support */}
+          {/* Bottom Split: Terminal & Output Console with Drag Resizer & Popout Support */}
           {isTerminalPoppedOut ? (
             <div className="bg-[#090d13] border-t border-slate-800 p-3 flex items-center justify-between font-mono shrink-0">
               <div className="flex items-center gap-2.5 text-xs text-slate-300">
@@ -1698,7 +1920,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
               <div
                 onPointerDown={handleStartResize}
                 onDoubleClick={() => setTerminalHeight((prev) => (prev > 100 ? 55 : 220))}
-                title="Потяните вверх/вниз, чтобы изменить размер терминала (двойной клик — скрыть/раскрыть)"
+                title="Потяните вверх/вниз, чтобы изменить размер (двойной клик — скрыть/раскрыть)"
                 className={`h-2 -mt-1 w-full cursor-row-resize flex items-center justify-center hover:bg-blue-500/40 active:bg-blue-500 transition-colors z-20 group ${
                   isResizingTerminal ? 'bg-blue-500' : ''
                 }`}
@@ -1706,28 +1928,67 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                 <div className="w-12 h-1 bg-slate-700 group-hover:bg-blue-300 rounded-full transition-colors" />
               </div>
 
-              {/* Terminal Header Bar */}
-              <div className="px-3.5 py-1.5 bg-slate-950/90 border-b border-slate-800/80 flex items-center justify-between text-xs select-none">
-                <div className="flex items-center gap-2 text-slate-300 font-semibold text-[11px]">
-                  <Terminal className="w-3.5 h-3.5 text-emerald-400" />
-                  <span>Терминал / Консоль вывода</span>
-                  <span className="text-[10px] font-normal text-slate-500 hidden md:inline">
-                    (потяните за край для изменения высоты)
-                  </span>
+              {/* Tab Switcher & Action Header Bar */}
+              <div className="px-3 py-1.5 bg-slate-950/90 border-b border-slate-800/80 flex items-center justify-between text-xs select-none">
+                <div className="flex items-center gap-1.5">
+                  {/* Output Console Tab */}
+                  <button
+                    onClick={() => setActiveBottomTab('output')}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                      activeBottomTab === 'output'
+                        ? 'bg-slate-800 text-emerald-400 border border-slate-700'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    }`}
+                  >
+                    <FileText className="w-3.5 h-3.5 text-emerald-400" />
+                    <span>Вывод программы</span>
+                    {output && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                    )}
+                  </button>
+
+                  {/* Interactive Terminal Tab */}
+                  <button
+                    onClick={() => {
+                      setActiveBottomTab('terminal');
+                      setTimeout(() => terminalInputRef.current?.focus(), 50);
+                    }}
+                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                      activeBottomTab === 'terminal'
+                        ? 'bg-slate-800 text-blue-400 border border-slate-700'
+                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                    }`}
+                  >
+                    <Terminal className="w-3.5 h-3.5 text-blue-400" />
+                    <span>Терминал (bash / pip)</span>
+                    {isTerminalExecuting && (
+                      <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+                    )}
+                  </button>
                 </div>
 
                 <div className="flex items-center gap-2">
-                  <button
-                    onClick={() => setOutput('')}
-                    title="Очистить терминал"
-                    className="text-[11px] text-slate-400 hover:text-slate-200 transition flex items-center gap-1 font-medium px-2 py-0.5 rounded-md hover:bg-slate-900 cursor-pointer"
-                  >
-                    <RotateCcw className="w-3 h-3" /> Очистить
-                  </button>
+                  {activeBottomTab === 'output' ? (
+                    <button
+                      onClick={() => setOutput('')}
+                      title="Очистить вывод программы"
+                      className="text-[11px] text-slate-400 hover:text-slate-200 transition flex items-center gap-1 font-medium px-2 py-0.5 rounded-md hover:bg-slate-900 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Очистить
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setTerminalLogs([])}
+                      title="Очистить терминал"
+                      className="text-[11px] text-slate-400 hover:text-slate-200 transition flex items-center gap-1 font-medium px-2 py-0.5 rounded-md hover:bg-slate-900 cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" /> Очистить
+                    </button>
+                  )}
 
                   <button
                     onClick={handleTogglePopoutTerminal}
-                    title="Вынести терминал в отдельное окно для работы на втором мониторе"
+                    title="Вынести в отдельное окно для работы на втором мониторе"
                     className="text-[11px] text-blue-400 hover:text-blue-300 bg-blue-950/60 hover:bg-blue-900/60 border border-blue-800/60 px-2 py-0.5 rounded-md transition flex items-center gap-1 font-semibold cursor-pointer"
                   >
                     <ExternalLink className="w-3 h-3" />
@@ -1736,16 +1997,111 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                 </div>
               </div>
 
-              {/* Output Content */}
-              <div className="flex-1 p-3 text-[12px] overflow-y-auto select-text text-emerald-400 whitespace-pre-wrap leading-relaxed">
-                {output ? (
-                  output
-                ) : (
-                  <span className="text-slate-600">
-                    Нажмите «Запустить» или Ctrl+Enter для выполнения программы...
-                  </span>
-                )}
-              </div>
+              {/* Tab 1: Program Run Output */}
+              {activeBottomTab === 'output' && (
+                <div className="flex-1 p-3 text-[12px] overflow-y-auto select-text text-emerald-400 whitespace-pre-wrap leading-relaxed">
+                  {output ? (
+                    output
+                  ) : (
+                    <div className="text-slate-600 flex flex-col gap-1">
+                      <span>Нажмите «Запустить» или Ctrl+Enter для выполнения программы...</span>
+                      <span className="text-[11px] text-slate-700">
+                        (Переключитесь на вкладку «Терминал», чтобы установить библиотеки через pip install)
+                      </span>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Tab 2: Interactive Real Terminal (Pip, Bash, Python) */}
+              {activeBottomTab === 'terminal' && (
+                <div className="flex-1 flex flex-col min-h-0 bg-[#070b10]">
+                  {/* Quick Command Chips */}
+                  <div className="px-2.5 py-1.5 bg-slate-950/80 border-b border-slate-800/60 flex items-center gap-1.5 overflow-x-auto text-[11px] shrink-0 no-scrollbar">
+                    <span className="text-slate-500 font-semibold mr-1 text-[10px] shrink-0 flex items-center gap-1">
+                      <Box className="w-3 h-3 text-blue-400" /> Быстрые команды:
+                    </span>
+                    {[
+                      'pip install numpy',
+                      'pip install sympy',
+                      'pip install requests',
+                      'pip install matplotlib',
+                      'pip install pandas',
+                      'pip list',
+                      'python main.py',
+                    ].map((cmd) => (
+                      <button
+                        key={cmd}
+                        onClick={() => handleExecuteTerminalCommand(cmd)}
+                        disabled={isTerminalExecuting}
+                        className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-slate-300 hover:text-blue-300 border border-slate-800 hover:border-blue-500/50 rounded text-[10.5px] whitespace-nowrap transition cursor-pointer flex items-center gap-1"
+                      >
+                        <Download className="w-2.5 h-2.5 text-blue-400" />
+                        <span>{cmd}</span>
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Terminal Log Stream */}
+                  <div
+                    ref={terminalScrollRef}
+                    className="flex-1 p-3 text-[12px] overflow-y-auto font-mono select-text flex flex-col gap-2.5"
+                  >
+                    {terminalLogs.map((log) => (
+                      <div key={log.id} className="flex flex-col gap-0.5">
+                        <div className="flex items-center gap-2 text-[11px]">
+                          <span className="text-emerald-400 font-bold">$</span>
+                          <span className="text-slate-200 font-semibold">{log.cmd}</span>
+                          <span className="text-slate-600 text-[10px] ml-auto">{log.time}</span>
+                          {log.exitCode === 0 ? (
+                            <span className="text-[10px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-1 rounded flex items-center gap-0.5">
+                              <CheckCircle2 className="w-2.5 h-2.5" /> 0
+                            </span>
+                          ) : (
+                            <span className="text-[10px] text-rose-400 bg-rose-950/60 border border-rose-800/60 px-1 rounded flex items-center gap-0.5">
+                              <AlertCircle className="w-2.5 h-2.5" /> {log.exitCode}
+                            </span>
+                          )}
+                        </div>
+                        {log.output && (
+                          <pre className="text-slate-300 text-[11.5px] whitespace-pre-wrap pl-3 border-l border-slate-800/80 leading-relaxed break-words font-mono mt-0.5">
+                            {log.output}
+                          </pre>
+                        )}
+                      </div>
+                    ))}
+
+                    {isTerminalExecuting && (
+                      <div className="flex items-center gap-2 text-[11px] text-blue-400 animate-pulse pl-1">
+                        <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+                        <span>Выполняется команда...</span>
+                      </div>
+                    )}
+                  </div>
+
+                  {/* Command Input Prompt */}
+                  <div className="p-2 bg-slate-950 border-t border-slate-800/90 flex items-center gap-2 shrink-0">
+                    <span className="text-emerald-400 font-bold text-xs select-none pl-1">$</span>
+                    <input
+                      ref={terminalInputRef}
+                      type="text"
+                      value={terminalInput}
+                      onChange={(e) => setTerminalInput(e.target.value)}
+                      onKeyDown={handleTerminalKeyDown}
+                      placeholder="pip install sympy, python main.py, pip list, ls, clear..."
+                      disabled={isTerminalExecuting}
+                      className="flex-1 bg-transparent text-slate-100 font-mono text-[12px] focus:outline-none placeholder-slate-600"
+                    />
+                    <button
+                      onClick={() => handleExecuteTerminalCommand()}
+                      disabled={isTerminalExecuting || !terminalInput.trim()}
+                      className="px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded text-xs font-semibold transition cursor-pointer flex items-center gap-1 shadow-xs"
+                    >
+                      {isTerminalExecuting ? 'Выполняется...' : 'Выполнить'}
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </main>
