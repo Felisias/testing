@@ -70,3 +70,46 @@ export interface CodePlot {
   authorName?: string;
 }
 
+export interface ToolSkinConfig {
+  pen?: string;
+  highlighter?: string;
+  eraser?: string;
+  laser?: string;
+  shapes?: string;
+  text?: string;
+  select?: string;
+  pan?: string;
+}
+
+export interface ToolTransform {
+  x: number; // offset X in px
+  y: number; // offset Y in px
+  scale: number; // scale multiplier, e.g. 1.0, 1.5, 2.0
+  rotation?: number; // degrees, default -45
+}
+
+export type ToolLayoutConfig = Record<string, ToolTransform>;
+
+export const DEFAULT_TOOL_TRANSFORMS: ToolLayoutConfig = {
+  pen: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+  highlighter: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+  eraser: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+  laser: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+  rect: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+  text: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+  select: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+  pan: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+};
+
+export interface ExperimentalSkinSettings {
+  enabled: boolean;
+  toolSkins: ToolSkinConfig;
+  toolLayouts?: ToolLayoutConfig;
+}
+
+export const DEFAULT_EXPERIMENTAL_SKINS: ExperimentalSkinSettings = {
+  enabled: false,
+  toolSkins: {},
+  toolLayouts: DEFAULT_TOOL_TRANSFORMS,
+};
+

@@ -14,11 +14,12 @@ import {
   DEFAULT_TOOL_SETTINGS,
   WhiteboardAction,
 } from './types';
-import { KeybindSettings, DEFAULT_KEYBINDS } from './types/extra';
+import { KeybindSettings, DEFAULT_KEYBINDS, ExperimentalSkinSettings, DEFAULT_EXPERIMENTAL_SKINS, ToolLayoutConfig, DEFAULT_TOOL_TRANSFORMS } from './types/extra';
 import { getSocket, disconnectSocket, forceReconnectSocket } from './services/socket';
 import { voiceManager } from './services/webrtc';
 import { Canvas } from './components/Whiteboard/Canvas';
 import { Toolbar } from './components/Whiteboard/Toolbar';
+import { ExperimentalToolbar } from './components/Whiteboard/ExperimentalToolbar';
 import { VoiceControls } from './components/Voice/VoiceControls';
 import { RoomHeader } from './components/Room/RoomHeader';
 import { JoinModal } from './components/Room/JoinModal';
@@ -32,6 +33,7 @@ import confetti from 'canvas-confetti';
 import { WifiOff, RefreshCw, Radio } from 'lucide-react';
 
 const KEYBINDS_STORAGE_KEY = 'tutorboard_keybinds';
+const EXPERIMENTAL_SKINS_STORAGE_KEY = 'tutorboard_experimental_skins';
 const STORAGE_KEY = 'tutorboard_user_session';
 const ACTIVE_ROOM_KEY = 'tutorboard_active_room';
 
@@ -49,6 +51,25 @@ export default function App() {
   const [showAvatarPicker, setShowAvatarPicker] = useState(false);
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [isOffline, setIsOffline] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
+
+  // Experimental 3D Tool Skins Settings
+  const [experimentalSettings, setExperimentalSettings] = useState<ExperimentalSkinSettings>(() => {
+    try {
+      const saved = localStorage.getItem(EXPERIMENTAL_SKINS_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return {
+          ...DEFAULT_EXPERIMENTAL_SKINS,
+          ...parsed,
+          toolLayouts: {
+            ...DEFAULT_TOOL_TRANSFORMS,
+            ...(parsed.toolLayouts || {}),
+          },
+        };
+      }
+    } catch {}
+    return DEFAULT_EXPERIMENTAL_SKINS;
+  });
 
   // Mode View (Whiteboard vs Collaborative IDE)
   const [activeView, setActiveView] = useState<'board' | 'ide'>('board');
@@ -985,6 +1006,31 @@ export default function App() {
     showToast('Горячие клавиши успешно сохранены!');
   };
 
+  const handleSaveExperimentalSettings = (newSettings: ExperimentalSkinSettings) => {
+    setExperimentalSettings(newSettings);
+    try {
+      localStorage.setItem(EXPERIMENTAL_SKINS_STORAGE_KEY, JSON.stringify(newSettings));
+    } catch (e) {
+      console.error('Failed to save experimental tool skins to localStorage:', e);
+    }
+    showToast(newSettings.enabled ? '✨ 3D панель инструментов активирована!' : 'Стандартная панель инструментов включена');
+  };
+
+  const handleSaveToolLayouts = (newLayouts: ToolLayoutConfig) => {
+    setExperimentalSettings((prev) => {
+      const updated: ExperimentalSkinSettings = {
+        ...prev,
+        toolLayouts: newLayouts,
+      };
+      try {
+        localStorage.setItem(EXPERIMENTAL_SKINS_STORAGE_KEY, JSON.stringify(updated));
+      } catch (e) {
+        console.error('Failed to save experimental tool layouts to localStorage:', e);
+      }
+      return updated;
+    });
+  };
+
   const handleSaveProfile = ({
     userName: newName,
     avatar: newAvatar,
@@ -1133,34 +1179,63 @@ export default function App() {
             onMathInserted={() => setActiveMathInsert(undefined)}
           />
 
-          {/* Vertical Toolbar Docked at Left Border */}
-          <div className="absolute top-4 left-3 z-40">
-            <Toolbar
-              tool={tool}
-              setTool={setTool}
-              toolSettings={toolSettings}
-              updateToolSetting={updateToolSetting}
-              background={background}
-              setBackground={setBackground}
-              canEdit={canEdit}
-              userRole={userRole}
-              userName={userName}
-              userColor={userColor}
-              onClearPage={handleClearPage}
-              canUndo={canUndo}
-              canRedo={canRedo}
-              onUndo={handleUndo}
-              onRedo={handleRedo}
-              onImageUploaded={handleImageUploaded}
-              onExport={handleExportPNG}
-              onToggleMath={() => setIsMathOpen(!isMathOpen)}
-              isMathOpen={isMathOpen}
-            />
+          {/* Vertical Toolbar Docked at Left Border (Standard or Experimental 3D Rack) */}
+          <div className={`absolute top-4 z-40 ${experimentalSettings.enabled ? 'left-0' : 'left-3'}`}>
+            {experimentalSettings.enabled ? (
+              <ExperimentalToolbar
+                tool={tool}
+                setTool={setTool}
+                toolSettings={toolSettings}
+                updateToolSetting={updateToolSetting}
+                background={background}
+                setBackground={setBackground}
+                canEdit={canEdit}
+                userRole={userRole}
+                userName={userName}
+                userColor={userColor}
+                onClearPage={handleClearPage}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onUndo={handleUndo}
+                onRedo={handleRedo}
+                onImageUploaded={handleImageUploaded}
+                onExport={handleExportPNG}
+                onToggleMath={() => setIsMathOpen(!isMathOpen)}
+                isMathOpen={isMathOpen}
+                toolSkins={experimentalSettings.toolSkins}
+                toolLayouts={experimentalSettings.toolLayouts}
+                onSaveLayouts={handleSaveToolLayouts}
+                onSaveFullSettings={handleSaveExperimentalSettings}
+                onShowToast={showToast}
+              />
+            ) : (
+              <Toolbar
+                tool={tool}
+                setTool={setTool}
+                toolSettings={toolSettings}
+                updateToolSetting={updateToolSetting}
+                background={background}
+                setBackground={setBackground}
+                canEdit={canEdit}
+                userRole={userRole}
+                userName={userName}
+                userColor={userColor}
+                onClearPage={handleClearPage}
+                canUndo={canUndo}
+                canRedo={canRedo}
+                onUndo={handleUndo}
+                onRedo={handleRedo}
+                onImageUploaded={handleImageUploaded}
+                onExport={handleExportPNG}
+                onToggleMath={() => setIsMathOpen(!isMathOpen)}
+                isMathOpen={isMathOpen}
+              />
+            )}
           </div>
 
           {/* Floating Math Symbols Drawer at Left (opens next to toolbar) */}
           {isMathOpen && (
-            <div className="absolute top-4 left-16 z-40">
+            <div className={`absolute top-4 z-40 ${experimentalSettings.enabled ? 'left-32' : 'left-16'}`}>
               <MathToolbar
                 isOpen={isMathOpen}
                 onToggle={() => setIsMathOpen(!isMathOpen)}
@@ -1213,12 +1288,15 @@ export default function App() {
           onChangeAvatar={() => setShowAvatarPicker(true)}
         />
 
-        {/* Settings Modal (Keybinds) */}
+        {/* Settings Modal (Keybinds & Experimental 3D Tool Skins) */}
         <SettingsModal
           isOpen={isSettingsOpen}
           onClose={() => setIsSettingsOpen(false)}
           keybinds={keybinds}
           onSaveKeybinds={handleSaveKeybinds}
+          userRole={userRole}
+          experimentalSettings={experimentalSettings}
+          onSaveExperimentalSettings={handleSaveExperimentalSettings}
         />
 
         {/* Profile & Avatar Customization Modal */}
