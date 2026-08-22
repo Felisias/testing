@@ -1,30 +1,34 @@
 @import "tailwindcss";
 
-/* VS Code Dark+ Standard Syntax Highlighting Tokens */
+/* PyCharm / JetBrains New UI Darcula Syntax Highlighting Tokens */
 .token.comment,
 .token.prolog,
 .token.doctype,
 .token.cdata {
-  color: #6a9955 !important;
+  color: #7A7E85 !important;
   font-style: italic;
 }
 
 .token.punctuation {
-  color: #d4d4d4 !important;
+  color: #BCBEC4 !important;
 }
 
 .token.namespace {
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 .token.property,
 .token.tag,
-.token.boolean,
-.token.number,
 .token.constant,
 .token.symbol,
 .token.deleted {
-  color: #b5cea8 !important;
+  color: #9876AA !important;
+}
+
+.token.boolean,
+.token.number {
+  color: #2AACB8 !important;
+  font-weight: 500;
 }
 
 .token.selector,
@@ -33,7 +37,7 @@
 .token.char,
 .token.builtin,
 .token.inserted {
-  color: #ce9178 !important;
+  color: #6AAB73 !important;
 }
 
 .token.operator,
@@ -41,31 +45,34 @@
 .token.url,
 .language-css .token.string,
 .style .token.string {
-  color: #d4d4d4 !important;
+  color: #BCBEC4 !important;
 }
 
 .token.atrule,
 .token.attr-value,
 .token.keyword {
-  color: #569cd6 !important;
+  color: #CF8E6D !important;
   font-weight: 600;
 }
 
 .token.function,
 .token.class-name {
-  color: #dcdcaa !important;
+  color: #56A8F5 !important;
 }
 
 .token.regex,
 .token.important,
 .token.variable {
-  color: #9cdcfe !important;
+  color: #BCBEC4 !important;
 }
 
 .token.type-annotation,
-.token.type,
-.token.class-name {
-  color: #4ec9b0 !important;
+.token.type {
+  color: #2AACB8 !important;
+}
+
+.token.decorator {
+  color: #BBB529 !important;
 }
 
 .token.important,
@@ -80,7 +87,7 @@
 .code-editor-textarea,
 .code-editor-pre,
 .code-font-measure {
-  font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
+  font-family: 'JetBrains Mono', 'Fira Code', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace !important;
   font-size: 13px !important;
   line-height: 24px !important;
   letter-spacing: 0px !important;
@@ -93,15 +100,16 @@
 /* Custom transparent text selection for dual-layer syntax highlighter */
 .code-editor-textarea {
   color: transparent !important;
-  caret-color: #38bdf8 !important;
+  caret-color: #589DF6 !important;
 }
 
 .code-editor-textarea::selection {
-  background-color: rgba(59, 130, 246, 0.38) !important;
+  background-color: rgba(53, 116, 240, 0.35) !important;
   color: transparent !important;
 }
 
 .code-editor-textarea::-moz-selection {
-  background-color: rgba(59, 130, 246, 0.38) !important;
+  background-color: rgba(53, 116, 240, 0.35) !important;
   color: transparent !important;
 }
+

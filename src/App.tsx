@@ -30,12 +30,20 @@ import { SettingsModal } from './components/Room/SettingsModal';
 import { CodeIDE } from './components/IDE/CodeIDE';
 import { AvatarPicker } from './components/Common/AvatarPicker';
 import confetti from 'canvas-confetti';
-import { WifiOff, RefreshCw, Radio } from 'lucide-react';
+import { WifiOff, RefreshCw, Radio, Layers, Undo2, Redo2 } from 'lucide-react';
 
 const KEYBINDS_STORAGE_KEY = 'tutorboard_keybinds';
 const EXPERIMENTAL_SKINS_STORAGE_KEY = 'tutorboard_experimental_skins';
 const STORAGE_KEY = 'tutorboard_user_session';
 const ACTIVE_ROOM_KEY = 'tutorboard_active_room';
+
+const BACKGROUND_OPTIONS: { id: BackgroundType; label: string; desc: string }[] = [
+  { id: 'grid', label: 'Клетка', desc: 'Для математики и физики' },
+  { id: 'dots', label: 'Точки', desc: 'Для графиков и схем' },
+  { id: 'lines', label: 'Линейка', desc: 'Для языков и письма' },
+  { id: 'blank', label: 'Белый лист', desc: 'Чистая доска' },
+  { id: 'dark-grid', label: 'Меловая доска', desc: 'Темный фон с сеткой' },
+];
 
 export default function App() {
   // Session & User State
@@ -74,6 +82,7 @@ export default function App() {
   // Mode View (Whiteboard vs Collaborative IDE)
   const [activeView, setActiveView] = useState<'board' | 'ide'>('board');
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
 
   // Keybinds state
   const [keybinds, setKeybinds] = useState<KeybindSettings>(() => {
@@ -117,6 +126,7 @@ export default function App() {
   );
 
   const [background, setBackground] = useState<BackgroundType>('grid');
+  const [activeBgFlyout, setActiveBgFlyout] = useState(false);
   const [activePageIndex, setActivePageIndex] = useState(0);
   const [totalPages, setTotalPages] = useState(1);
   const [pages, setPages] = useState<{ [pageIndex: number]: WhiteboardElement[] }>({
@@ -1207,6 +1217,8 @@ export default function App() {
                 onSaveLayouts={handleSaveToolLayouts}
                 onSaveFullSettings={handleSaveExperimentalSettings}
                 onShowToast={showToast}
+                isLayoutEditMode={isLayoutEditMode}
+                setIsLayoutEditMode={setIsLayoutEditMode}
               />
             ) : (
               <Toolbar
@@ -1248,14 +1260,94 @@ export default function App() {
             </div>
           )}
 
-          {/* Floating Bottom Voice Controls Bar */}
-          <div className="absolute bottom-4 left-16 z-30 max-w-[calc(100%-160px)]">
-            <VoiceControls
-              participants={participants}
-              currentUserId={myUserId}
-              userRole={userRole}
-              userName={userName}
-            />
+          {/* Bottom Left Control Bar: [ Undo / Redo & Sheet Layout ] + [ Voice Communication Controls ] */}
+          <div className="absolute bottom-4 left-4 z-40 flex items-center gap-2.5 max-w-[calc(100%-140px)] pointer-events-auto">
+            {/* Sheet Background & Undo/Redo Control Panel */}
+            <div className="flex items-center gap-1.5 p-1.5 bg-white/95 backdrop-blur-xl rounded-2xl border border-slate-200/90 shadow-lg text-slate-800 shrink-0">
+              {/* Sheet Background / Grid Settings */}
+              {canEdit && (
+                <div className="relative">
+                  <button
+                    onClick={() => setActiveBgFlyout(!activeBgFlyout)}
+                    title="Разметка листа (Клетка, Линейка, Меловая)"
+                    className={`w-8 h-8 rounded-xl transition flex items-center justify-center cursor-pointer border ${
+                      activeBgFlyout
+                        ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                        : 'bg-slate-100 hover:bg-slate-200 text-purple-700 border-slate-200'
+                    }`}
+                  >
+                    <Layers className="w-4 h-4" />
+                  </button>
+
+                  {activeBgFlyout && (
+                    <div
+                      className="absolute left-0 bottom-full mb-3 w-60 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-purple-200 p-3 z-[600] animate-in fade-in slide-in-from-bottom-2 text-slate-800 filter drop-shadow-2xl"
+                      onMouseLeave={() => setActiveBgFlyout(false)}
+                    >
+                      <div className="text-[11px] font-bold text-purple-900 mb-2 uppercase tracking-wider">
+                        Разметка листа
+                      </div>
+                      <div className="flex flex-col gap-1">
+                        {BACKGROUND_OPTIONS.map((bg) => (
+                          <button
+                            key={bg.id}
+                            onClick={() => {
+                              setBackground(bg.id);
+                              getSocket().emit('board:background:set', { background: bg.id });
+                              setActiveBgFlyout(false);
+                            }}
+                            className={`p-2 rounded-xl text-left transition flex items-center justify-between cursor-pointer border ${
+                              background === bg.id
+                                ? 'bg-purple-100 text-purple-900 border-purple-300 font-bold shadow-xs'
+                                : 'bg-slate-50 hover:bg-slate-100 text-slate-700 border-slate-200'
+                            }`}
+                          >
+                            <span className="text-xs font-semibold">{bg.label}</span>
+                            <span className="text-[10px] text-slate-400">{bg.desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Undo / Redo Buttons */}
+              <button
+                onClick={handleUndo}
+                disabled={!canUndo || !canEdit}
+                title="Отменить действие (Ctrl+Z)"
+                className={`w-7 h-8 rounded-lg flex items-center justify-center transition ${
+                  canUndo && canEdit
+                    ? 'hover:bg-slate-100 text-slate-700 hover:text-slate-900 cursor-pointer active:scale-95'
+                    : 'text-slate-300 opacity-40 cursor-not-allowed'
+                }`}
+              >
+                <Undo2 className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={handleRedo}
+                disabled={!canRedo || !canEdit}
+                title="Повторить действие (Ctrl+Y)"
+                className={`w-7 h-8 rounded-lg flex items-center justify-center transition ${
+                  canRedo && canEdit
+                    ? 'hover:bg-slate-100 text-slate-700 hover:text-slate-900 cursor-pointer active:scale-95'
+                    : 'text-slate-300 opacity-40 cursor-not-allowed'
+                }`}
+              >
+                <Redo2 className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Voice Controls Bar on the same bottom level right next to it */}
+            <div className="shrink-0">
+              <VoiceControls
+                participants={participants}
+                currentUserId={myUserId}
+                userRole={userRole}
+                userName={userName}
+              />
+            </div>
           </div>
 
           {/* Toast Notifications */}
@@ -1297,6 +1389,11 @@ export default function App() {
           userRole={userRole}
           experimentalSettings={experimentalSettings}
           onSaveExperimentalSettings={handleSaveExperimentalSettings}
+          onOpenLayoutEditMode={() => {
+            setExperimentalSettings((prev) => ({ ...prev, enabled: true }));
+            setIsLayoutEditMode(true);
+            showToast('🎯 Режим настройки расположения инструментов активирован');
+          }}
         />
 
         {/* Profile & Avatar Customization Modal */}

@@ -19,6 +19,11 @@ import { voiceManager } from '../../services/webrtc';
 import { getSuggestions, cleanInsertText, expandSnippet, CodeSuggestion } from './codeSuggestions';
 import { AutocompletePopup } from './AutocompletePopup';
 import { FloatingPlotViewer } from './FloatingPlotViewer';
+import { PyCharmHeader } from './PyCharmHeader';
+import { PyCharmActivityBar } from './PyCharmActivityBar';
+import { PyCharmProjectTree } from './PyCharmProjectTree';
+import { PyCharmStatusBar } from './PyCharmStatusBar';
+import { PythonLogo, PyCharmFileIcon } from './PyCharmIcons';
 import {
   Code2,
   Play,
@@ -50,6 +55,11 @@ import {
   Settings2,
   Image as ImageIcon,
   Eye,
+  RefreshCw,
+  StopCircle,
+  SplitSquareVertical,
+  Minus,
+  X,
 } from 'lucide-react';
 
 interface CodeIDEProps {
@@ -281,6 +291,8 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
   const [newFileLang, setNewFileLang] = useState<string>('python');
   const [showNewFileModal, setShowNewFileModal] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
+  const [isProjectOpen, setIsProjectOpen] = useState<boolean>(true);
+  const [localCursor, setLocalCursor] = useState<{ line: number; col: number }>({ line: 1, col: 1 });
 
   // Microphone state
   const [isMicMuted, setIsMicMuted] = useState<boolean>(() => voiceManager.getIsMuted());
@@ -1232,6 +1244,8 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
     const lineNumber = startLines.length;
     const column = startLines[startLines.length - 1].length + 1;
 
+    setLocalCursor({ line: lineNumber, col: column });
+
     let selection: CodeSelection | null = null;
     if (selStart !== selEnd) {
       const minSel = Math.min(selStart, selEnd);
@@ -1696,399 +1710,129 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
       id="tutorboard-ide"
       className="w-full h-full flex flex-col bg-slate-950 text-slate-200 select-none overflow-hidden font-sans"
     >
-      {/* Top Header - Professional & Serious Dark VS Code Theme with Avatars */}
-      <header className="h-11 bg-slate-950 border-b border-slate-800/90 px-3.5 flex items-center justify-between gap-3 shrink-0">
-        {/* Left: Return to Whiteboard + Project Title */}
-        <div className="flex items-center gap-3">
-          <button
-            onClick={onBackToBoard}
-            className="px-2.5 py-1 bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white rounded-lg text-xs font-semibold transition flex items-center gap-1.5 border border-slate-800"
-            title="Вернуться к интерактивной доске"
-          >
-            <Layers className="w-3.5 h-3.5 text-blue-400" />
-            <span>Доска</span>
-          </button>
-
-          <div className="h-4 w-px bg-slate-800" />
-
-          <div className="flex items-center gap-2">
-            <Code2 className="w-4 h-4 text-emerald-400" />
-            <span className="text-xs font-bold text-slate-200">Среда разработки</span>
-            <span className="text-[11px] text-slate-500 font-mono">[{roomId}]</span>
-          </div>
-        </div>
-
-        {/* Center: Collaborators Indicator with Avatars */}
-        <div className="hidden sm:flex items-center gap-2 text-[11px] text-slate-400">
-          <div className="flex items-center gap-1.5 bg-slate-900/90 px-2.5 py-1 rounded-xl border border-slate-800">
-            <UserAvatar
-              avatar={userAvatar}
-              color={userColor}
-              name={userName}
-              size="xs"
-              className="w-4 h-4 text-[10px]"
-            />
-            <span className="text-slate-200 font-medium">{userName} (Вы)</span>
-          </div>
-
-          {(Object.values(otherCursors) as CodeCursor[]).map((c) => (
-            <div
-              key={c.userId}
-              className="flex items-center gap-1.5 bg-slate-900/90 px-2.5 py-1 rounded-xl border border-slate-800"
-            >
-              <UserAvatar
-                avatar={c.avatar || '🎓'}
-                color={c.color}
-                name={c.userName}
-                size="xs"
-                className="w-4 h-4 text-[10px]"
-              />
-              <span className="text-slate-300 font-medium">
-                {c.userName} <span className="text-slate-500 font-mono">:{c.lineNumber}</span>
-              </span>
-            </div>
-          ))}
-        </div>
-
-        {/* Right: Timeout Selector (Tutor control) + Language Selector + Copy + Run */}
-        <div className="flex items-center gap-2 relative">
-          {/* Configurable Timeout Button & Dropdown */}
-          <div className="relative">
-            {userRole === 'tutor' ? (
-              <button
-                onClick={() => setShowTimeoutDropdown((prev) => !prev)}
-                title="Настроить предельное время выполнения программ (лимит до прерывания)"
-                className={`px-2.5 py-1 rounded-lg text-xs font-medium transition flex items-center gap-1.5 border ${
-                  showTimeoutDropdown
-                    ? 'bg-amber-950/60 border-amber-500/70 text-amber-300'
-                    : 'bg-slate-900 hover:bg-slate-800 border-slate-800 text-slate-300 hover:text-white'
-                }`}
-              >
-                <Timer className="w-3.5 h-3.5 text-amber-400" />
-                <span className="font-mono">{timeoutSeconds}с</span>
-                <ChevronDown className="w-3 h-3 text-slate-400" />
-              </button>
-            ) : (
-              <div
-                title="Предельное время выполнения программ (управляется преподавателем)"
-                className="px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 border bg-slate-900/80 border-slate-800 text-slate-400 cursor-default"
-              >
-                <Timer className="w-3.5 h-3.5 text-amber-400/80" />
-                <span className="font-mono">{timeoutSeconds}с</span>
-              </div>
-            )}
-
-            {/* Tutor Timeout Dropdown Menu */}
-            {showTimeoutDropdown && userRole === 'tutor' && (
-              <div className="absolute right-0 top-full mt-1.5 w-64 bg-slate-900 border border-slate-800 rounded-xl shadow-2xl p-3 z-50 animate-in fade-in zoom-in-95 duration-100 font-sans">
-                <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-800 text-xs font-semibold text-slate-200">
-                  <div className="flex items-center gap-1.5">
-                    <Timer className="w-3.5 h-3.5 text-amber-400" />
-                    <span>Лимит времени (Тайм-аут)</span>
-                  </div>
-                  <span className="text-[10px] text-amber-400 font-mono font-bold bg-amber-950/70 border border-amber-800/50 px-1.5 py-0.5 rounded">
-                    {timeoutSeconds} сек
-                  </span>
-                </div>
-
-                <p className="text-[11px] text-slate-400 mb-2.5 leading-relaxed">
-                  Программы, выполняющиеся дольше лимита (например, бесконечные циклы), будут автоматически остановлены.
-                </p>
-
-                {/* Quick Presets */}
-                <div className="grid grid-cols-4 gap-1 mb-3">
-                  {[3, 5, 10, 15, 30, 60, 90, 120].map((sec) => (
-                    <button
-                      key={sec}
-                      onClick={() => handleSetTimeout(sec)}
-                      className={`py-1 rounded-lg text-xs font-mono font-semibold transition border ${
-                        timeoutSeconds === sec
-                          ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-xs'
-                          : 'bg-slate-950 hover:bg-slate-800 border-slate-800 text-slate-300'
-                      }`}
-                    >
-                      {sec}с
-                    </button>
-                  ))}
-                </div>
-
-                {/* Custom seconds input */}
-                <form
-                  onSubmit={(e) => {
-                    e.preventDefault();
-                    const val = parseInt(customTimeoutInput, 10);
-                    if (!isNaN(val) && val >= 1) {
-                      handleSetTimeout(val);
-                      setCustomTimeoutInput('');
-                    }
-                  }}
-                  className="flex items-center gap-1.5 pt-2 border-t border-slate-800/80"
-                >
-                  <input
-                    type="number"
-                    min="1"
-                    max="180"
-                    placeholder="Свой (сек)"
-                    value={customTimeoutInput}
-                    onChange={(e) => setCustomTimeoutInput(e.target.value)}
-                    className="flex-1 bg-slate-950 border border-slate-800 rounded-lg px-2.5 py-1 text-xs text-white placeholder-slate-500 focus:outline-none focus:border-amber-500 font-mono"
-                  />
-                  <button
-                    type="submit"
-                    className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-white rounded-lg text-xs font-semibold transition"
-                  >
-                    Задать
-                  </button>
-                </form>
-              </div>
-            )}
-          </div>
-
-          <select
-            value={activeFile?.language || 'python'}
-            onChange={(e) => handleChangeLanguage(e.target.value)}
-            className="bg-slate-900 border border-slate-800 text-xs font-medium text-slate-200 rounded-lg px-2.5 py-1 focus:outline-none focus:border-slate-700 font-mono cursor-pointer"
-          >
-            <option value="python">Python 3 (.py)</option>
-            <option value="javascript">JavaScript (.js)</option>
-            <option value="typescript">TypeScript (.ts)</option>
-            <option value="cpp">C++ 20 (.cpp)</option>
-            <option value="html">HTML / CSS</option>
-            <option value="sql">SQL (.sql)</option>
-          </select>
-
-          <button
-            onClick={copyCode}
-            title="Скопировать исходный код"
-            className="p-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg transition border border-slate-800"
-          >
-            {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-          </button>
-
-          <button
-            onClick={handleRunCode}
-            disabled={isRunning}
-            title="Запустить код (Ctrl+Enter)"
-            className="px-3.5 py-1 bg-emerald-700 hover:bg-emerald-600 active:bg-emerald-800 disabled:opacity-50 text-white rounded-lg text-xs font-semibold transition flex items-center gap-1.5 shadow-sm"
-          >
-            <Play className="w-3 h-3 fill-white" />
-            <span>{isRunning ? 'Выполнение...' : 'Запустить'}</span>
-          </button>
-        </div>
-      </header>
+      {/* PyCharm Main Navigation Header */}
+      <PyCharmHeader
+        roomId={roomId}
+        projectName={`Analiticheskoe_reshenie_${roomId.slice(0, 4)}`}
+        activeFileName={activeFile?.name || 'main.py'}
+        activeLanguage={activeFile?.language || 'python'}
+        isRunning={isRunning}
+        onRunCode={handleRunCode}
+        copied={copied}
+        onCopyCode={copyCode}
+        onBackToBoard={onBackToBoard}
+        userName={userName}
+        userRole={userRole}
+        userColor={userColor}
+        userAvatar={userAvatar}
+        otherCursors={otherCursors}
+        timeoutSeconds={timeoutSeconds}
+        onSetTimeout={handleSetTimeout}
+      />
 
       {/* Main IDE Workspace */}
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar: File Tree */}
-        <aside className="w-52 bg-slate-950 border-r border-slate-800/90 flex flex-col shrink-0">
-          <div className="h-9 px-3 border-b border-slate-800/80 flex items-center justify-between text-[11px] font-semibold text-slate-400 tracking-wide uppercase">
-            <span className="flex items-center gap-1.5">
-              <FileCode className="w-3.5 h-3.5 text-slate-500" />
-              <span>Файлы проекта</span>
-            </span>
-            <button
-              onClick={() => setShowNewFileModal(true)}
-              title="Создать файл"
-              className="p-1 hover:bg-slate-900 text-slate-400 hover:text-slate-200 rounded transition"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          </div>
+      <div className="flex-1 flex overflow-hidden bg-[#1E1F22]">
+        {/* PyCharm Left Activity Bar */}
+        <PyCharmActivityBar
+          isProjectOpen={isProjectOpen}
+          onToggleProject={() => setIsProjectOpen((prev) => !prev)}
+          activeBottomTab={activeBottomTab}
+          onSelectBottomTab={(tab) => setActiveBottomTab(tab)}
+          isMicMuted={isMicMuted}
+          isSpeaking={isSpeaking}
+          onToggleMic={handleToggleMic}
+        />
 
-          <div className="flex-1 overflow-y-auto p-1.5 space-y-0.5 font-mono text-xs">
-            {files.map((file) => {
-              const isActive = file.id === activeFileId;
-              return (
-                <div
-                  key={file.id}
-                  onClick={() => setActiveFileId(file.id)}
-                  className={`group px-2.5 py-1.5 rounded-lg cursor-pointer flex items-center justify-between transition ${
-                    isActive
-                      ? 'bg-slate-800/90 text-white font-semibold shadow-xs'
-                      : 'text-slate-400 hover:bg-slate-900/80 hover:text-slate-200'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 truncate">
-                    <FileText
-                      className={`w-3.5 h-3.5 shrink-0 ${
-                        file.name.endsWith('.py')
-                          ? 'text-amber-400'
-                          : file.name.endsWith('.js') || file.name.endsWith('.ts')
-                          ? 'text-yellow-400'
-                          : file.name.endsWith('.cpp')
-                          ? 'text-blue-400'
-                          : 'text-slate-400'
-                      }`}
-                    />
-                    <span className="truncate">{file.name}</span>
-                  </div>
-
-                  {files.length > 1 && (
-                    <button
-                      onClick={(e) => handleDeleteFile(file.id, e)}
-                      title="Удалить файл"
-                      className="opacity-0 group-hover:opacity-100 hover:text-rose-400 p-0.5 rounded transition"
-                    >
-                      <Trash2 className="w-3 h-3" />
-                    </button>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-
-          {/* Left Sidebar Section 2: Generated Plots / Images */}
-          {plots.length > 0 && (
-            <div className="border-t border-slate-800/80 flex flex-col max-h-[48%] shrink-0 bg-slate-950/60">
-              <div className="h-8 px-3 bg-slate-900/60 flex items-center justify-between text-[11px] font-semibold text-amber-400 tracking-wide">
-                <span className="flex items-center gap-1.5">
-                  <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
-                  <span>Графики ({plots.length})</span>
-                </span>
-                <div className="flex items-center gap-1">
-                  <button
-                    onClick={handleClearPlots}
-                    title="Очистить все графики"
-                    className="p-1 hover:bg-slate-800 text-slate-400 hover:text-rose-400 rounded transition cursor-pointer"
-                  >
-                    <Trash2 className="w-3 h-3" />
-                  </button>
-                </div>
-              </div>
-
-              <div className="overflow-y-auto p-1.5 space-y-1 font-mono text-xs">
-                {plots.map((plot) => {
-                  const isCurrent = showPlotViewer && activePlotId === plot.id;
-                  return (
-                    <div
-                      key={plot.id}
-                      onClick={() => handleOpenPlot(plot.id)}
-                      className={`group p-1.5 rounded-lg cursor-pointer flex items-center justify-between transition border ${
-                        isCurrent
-                          ? 'bg-amber-950/40 text-amber-200 border-amber-500/60 shadow-xs'
-                          : 'bg-slate-900/70 hover:bg-slate-800/90 text-slate-300 border-slate-800/80 hover:border-slate-700'
-                      }`}
-                    >
-                      <div className="flex items-center gap-2 min-w-0">
-                        <img
-                          src={plot.dataUrl}
-                          alt={plot.name}
-                          className="w-6 h-6 rounded object-cover border border-slate-700 bg-white shrink-0"
-                        />
-                        <div className="flex flex-col min-w-0">
-                          <span className="truncate text-[11px] font-semibold text-white leading-tight">
-                            {plot.name}
-                          </span>
-                          <span className="text-[9px] text-slate-400">
-                            {plot.size ? `${Math.round(plot.size / 1024)} КБ` : 'График'}
-                          </span>
-                        </div>
-                      </div>
-
-                      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition">
-                        <button
-                          onClick={(e) => handleCopyPlotImage(plot, e)}
-                          title="Скопировать в буфер обмена"
-                          className="p-1 hover:bg-slate-700 text-slate-300 hover:text-white rounded transition"
-                        >
-                          {copiedPlotId === plot.id ? (
-                            <Check className="w-3 h-3 text-emerald-400" />
-                          ) : (
-                            <Copy className="w-3 h-3" />
-                          )}
-                        </button>
-                        {onSendPlotToBoard && (
-                          <button
-                            onClick={(e) => handleSendPlotToWhiteboard(plot, e)}
-                            title="Вставить на интерактивную доску"
-                            className="p-1 hover:bg-indigo-900/60 text-slate-300 hover:text-indigo-300 rounded transition"
-                          >
-                            <Layers className="w-3 h-3" />
-                          </button>
-                        )}
-                        <button
-                          onClick={(e) => handleDeletePlot(plot.id, e)}
-                          title="Удалить график"
-                          className="p-1 hover:bg-rose-900/60 text-slate-400 hover:text-rose-400 rounded transition"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Left Sidebar Footer: Microphone Toggle Button + Quick shortcut info */}
-          <div className="p-2 border-t border-slate-900 flex flex-col gap-2 bg-slate-950/80">
-            <button
-              onClick={handleToggleMic}
-              title={isMicMuted ? 'Включить микрофон' : 'Заглушить микрофон'}
-              className={`w-full py-2 px-2.5 rounded-xl text-xs font-medium flex items-center justify-between transition cursor-pointer border ${
-                isMicMuted
-                  ? 'bg-rose-950/40 hover:bg-rose-900/60 text-rose-300 border-rose-800/50'
-                  : 'bg-emerald-950/50 hover:bg-emerald-900/60 text-emerald-300 border-emerald-700/60'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <div
-                  className={`w-6 h-6 rounded-lg flex items-center justify-center transition ${
-                    isMicMuted
-                      ? 'bg-rose-900/70 text-rose-200'
-                      : isSpeaking
-                      ? 'bg-emerald-500 text-white animate-pulse shadow-sm shadow-emerald-500/50'
-                      : 'bg-emerald-700/80 text-emerald-100'
-                  }`}
-                >
-                  {isMicMuted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
-                </div>
-                <div className="flex flex-col text-left">
-                  <span className="text-[11px] font-semibold leading-tight">
-                    {isMicMuted ? 'Микрофон выкл' : 'Микрофон вкл'}
-                  </span>
-                  <span className="text-[9px] text-slate-400">
-                    {isMicMuted ? 'Нажмите для вкл' : isSpeaking ? 'Говорите...' : 'Слушает'}
-                  </span>
-                </div>
-              </div>
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  isMicMuted ? 'bg-rose-500' : isSpeaking ? 'bg-emerald-400 animate-ping' : 'bg-emerald-500'
-                }`}
-              />
-            </button>
-
-            <div className="text-[10px] text-slate-500 text-center font-mono">
-              Ctrl+Enter — запуск
-            </div>
-          </div>
-        </aside>
+        {/* PyCharm Project Tree (Tool Window) */}
+        {isProjectOpen && (
+          <PyCharmProjectTree
+            roomId={roomId}
+            projectName={`Analiticheskoe_reshenie_${roomId.slice(0, 4)}`}
+            files={files}
+            activeFileId={activeFileId}
+            plots={plots}
+            activePlotId={activePlotId}
+            showPlotViewer={showPlotViewer}
+            copiedPlotId={copiedPlotId}
+            onSelectFile={(id) => setActiveFileId(id)}
+            onDeleteFile={handleDeleteFile}
+            onOpenNewFileModal={() => setShowNewFileModal(true)}
+            onOpenPlot={handleOpenPlot}
+            onDeletePlot={handleDeletePlot}
+            onClearPlots={handleClearPlots}
+            onCopyPlot={handleCopyPlotImage}
+            onSendPlotToBoard={
+              onSendPlotToBoard
+                ? (plot) => onSendPlotToBoard({ name: plot.name, dataUrl: plot.dataUrl })
+                : undefined
+            }
+            onCloseSidebar={() => setIsProjectOpen(false)}
+          />
+        )}
 
         {/* Center: Editor + Bottom Console Split */}
-        <main className="flex-1 flex flex-col min-w-0 bg-[#0d1117]">
-          {/* File Tab Bar */}
-          <div className="h-8 bg-slate-950 border-b border-slate-800/80 px-3 flex items-center justify-between text-xs">
-            <div className="flex items-center gap-2 font-mono">
-              <span className="text-slate-200 font-semibold">{activeFile?.name}</span>
-              <span className="text-slate-600">•</span>
-              <span className="text-slate-400 text-[11px]">{activeFile?.language}</span>
+        <main className="flex-1 flex flex-col min-w-0 bg-[#1E1F22]">
+          {/* PyCharm Editor File Tabs Bar */}
+          <div className="h-9 bg-[#1E1F22] border-b border-[#323232] flex items-center justify-between px-1 shrink-0 overflow-x-auto no-scrollbar">
+            <div className="flex items-center h-full">
+              {files.map((f) => {
+                const isActive = f.id === activeFileId;
+                return (
+                  <div
+                    key={f.id}
+                    onClick={() => setActiveFileId(f.id)}
+                    className={`group h-full px-3 flex items-center gap-2 text-[12px] font-sans border-r border-[#323232] cursor-pointer transition-colors select-none ${
+                      isActive
+                        ? 'bg-[#2B2D30] text-[#DFE1E5] font-medium border-t-2 border-t-[#3574F0]'
+                        : 'text-[#9DA0A8] hover:bg-[#26282B] hover:text-[#CED0D6] border-t-2 border-t-transparent'
+                    }`}
+                  >
+                    <PyCharmFileIcon filename={f.name} className="w-3.5 h-3.5 shrink-0" />
+                    <span className="truncate">{f.name}</span>
+                    {files.length > 1 && (
+                      <button
+                        onClick={(e) => handleDeleteFile(f.id, e)}
+                        className="opacity-0 group-hover:opacity-100 p-0.5 hover:bg-[#393B40] text-[#868A91] hover:text-white rounded transition"
+                        title="Закрыть вкладку"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
+
+              <button
+                onClick={() => setShowNewFileModal(true)}
+                title="Новый файл"
+                className="h-6 w-6 ml-1 flex items-center justify-center text-[#868A91] hover:text-[#DFE1E5] hover:bg-[#2B2D30] rounded transition"
+              >
+                <Plus className="w-3.5 h-3.5" />
+              </button>
             </div>
-            <div className="text-[11px] text-slate-500 font-mono">
-              {lineCount} {lineCount === 1 ? 'строка' : 'строк'}
+
+            {/* Breadcrumb path */}
+            <div className="hidden md:flex items-center gap-1.5 text-[11px] text-[#868A91] font-sans px-2">
+              <span className="hover:text-[#CED0D6] cursor-pointer">Analiticheskoe_reshenie</span>
+              <span>›</span>
+              <span className="text-[#CED0D6] font-medium">{activeFile?.name}</span>
             </div>
           </div>
 
           {/* Dual-Layer Synchronized Code Editor with Prism Syntax Highlighting */}
-          <div className="flex-1 flex overflow-hidden relative bg-[#0d1117]">
-            {/* Gutter Line Numbers */}
+          <div className="flex-1 flex overflow-hidden relative bg-[#1E1F22]">
+            {/* PyCharm Gutter Line Numbers */}
             <div
-              className="w-12 bg-[#090d13] border-r border-slate-800/70 select-none py-3 text-right pr-2.5 font-mono text-[13px] text-slate-600 font-medium overflow-hidden shrink-0"
+              className="w-12 bg-[#1E1F22] border-r border-[#323232] select-none py-3 text-right pr-3 font-mono text-[13px] text-[#606366] font-normal overflow-hidden shrink-0"
               style={{ lineHeight: `${LINE_HEIGHT}px` }}
             >
-              {Array.from({ length: Math.max(lineCount, 30) }).map((_, i) => (
-                <div key={i}>{i + 1}</div>
+              {Array.from({ length: Math.max(lineCount, 35) }).map((_, i) => (
+                <div
+                  key={i}
+                  className={localCursor.line === i + 1 ? 'text-[#A9B7C6] font-semibold' : ''}
+                >
+                  {i + 1}
+                </div>
               ))}
             </div>
 
@@ -2097,7 +1841,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
               ref={editorContainerRef}
               onMouseMove={handleEditorMouseMove}
               onMouseLeave={handleEditorMouseLeave}
-              className="flex-1 relative overflow-hidden"
+              className="flex-1 relative overflow-hidden bg-[#1E1F22]"
             >
               {/* Syntax Highlighted Background Layer */}
               <pre
@@ -2285,24 +2029,24 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
             </div>
           </div>
 
-          {/* Bottom Split: Terminal & Output Console with Drag Resizer & Popout Support */}
+          {/* Bottom Split: Terminal & Output Console with Drag Resizer & Popout Support (PyCharm Tool Window) */}
           {isTerminalPoppedOut ? (
-            <div className="bg-[#090d13] border-t border-slate-800 p-3 flex items-center justify-between font-mono shrink-0">
-              <div className="flex items-center gap-2.5 text-xs text-slate-300">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                <span className="font-semibold text-slate-200">🖥️ Терминал вынесен в отдельное окно</span>
-                <span className="text-[11px] text-slate-500 hidden sm:inline">(можно переместить на второй монитор)</span>
+            <div className="bg-[#1E1F22] border-t border-[#323232] p-2.5 px-3 flex items-center justify-between font-sans shrink-0">
+              <div className="flex items-center gap-2.5 text-xs text-[#DFE1E5]">
+                <span className="w-2 h-2 rounded-full bg-[#57B77A] animate-pulse" />
+                <span className="font-medium text-[#DFE1E5]">🖥️ Терминал вынесен в отдельное окно</span>
+                <span className="text-[11px] text-[#868A91] hidden sm:inline">(удобно для работы на двух мониторах)</span>
               </div>
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => setOutput('')}
-                  className="text-xs text-slate-400 hover:text-slate-200 bg-slate-900 hover:bg-slate-800 border border-slate-700/70 px-2.5 py-1 rounded-lg transition cursor-pointer flex items-center gap-1.5"
+                  className="text-xs text-[#CED0D6] hover:text-white bg-[#2B2D30] hover:bg-[#393B40] border border-[#393B40] px-2.5 py-1 rounded transition cursor-pointer flex items-center gap-1.5"
                 >
                   <RotateCcw className="w-3 h-3" /> Очистить
                 </button>
                 <button
                   onClick={handleTogglePopoutTerminal}
-                  className="text-xs font-semibold text-white bg-blue-600 hover:bg-blue-500 px-3 py-1 rounded-lg transition shadow-xs cursor-pointer flex items-center gap-1.5"
+                  className="text-xs font-medium text-white bg-[#3574F0] hover:bg-[#3064D0] px-3 py-1 rounded transition shadow-xs cursor-pointer flex items-center gap-1.5"
                 >
                   <ArrowUpRight className="w-3.5 h-3.5" /> Прикрепить к IDE
                 </button>
@@ -2311,36 +2055,36 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
           ) : (
             <div
               style={{ height: `${terminalHeight}px` }}
-              className="bg-[#090d13] border-t border-slate-800 flex flex-col shrink-0 font-mono relative transition-all"
+              className="bg-[#1E1F22] border-t border-[#323232] flex flex-col shrink-0 font-sans relative transition-all"
             >
               {/* Drag Resizer Edge Bar */}
               <div
                 onPointerDown={handleStartResize}
                 onDoubleClick={() => setTerminalHeight((prev) => (prev > 100 ? 55 : 220))}
                 title="Потяните вверх/вниз, чтобы изменить размер (двойной клик — скрыть/раскрыть)"
-                className={`h-2 -mt-1 w-full cursor-row-resize flex items-center justify-center hover:bg-blue-500/40 active:bg-blue-500 transition-colors z-20 group ${
-                  isResizingTerminal ? 'bg-blue-500' : ''
+                className={`h-1.5 -mt-1 w-full cursor-row-resize flex items-center justify-center hover:bg-[#3574F0]/60 active:bg-[#3574F0] transition-colors z-20 group ${
+                  isResizingTerminal ? 'bg-[#3574F0]' : 'bg-transparent'
                 }`}
               >
-                <div className="w-12 h-1 bg-slate-700 group-hover:bg-blue-300 rounded-full transition-colors" />
+                <div className="w-10 h-0.5 bg-[#4E5157] group-hover:bg-[#3574F0] rounded-full transition-colors" />
               </div>
 
-              {/* Tab Switcher & Action Header Bar */}
-              <div className="px-3 py-1.5 bg-slate-950/90 border-b border-slate-800/80 flex items-center justify-between text-xs select-none">
-                <div className="flex items-center gap-1.5">
-                  {/* Output Console Tab */}
+              {/* PyCharm Tool Window Tab Switcher & Header Bar */}
+              <div className="h-8 bg-[#2B2D30] border-b border-[#323232] flex items-center justify-between px-1 text-xs select-none shrink-0">
+                <div className="flex items-center h-full">
+                  {/* Run / Output Console Tab */}
                   <button
                     onClick={() => setActiveBottomTab('output')}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                    className={`h-full px-3 text-[12px] font-sans flex items-center gap-1.5 border-r border-[#323232] transition-colors cursor-pointer ${
                       activeBottomTab === 'output'
-                        ? 'bg-slate-800 text-emerald-400 border border-slate-700'
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                        ? 'bg-[#1E1F22] text-[#DFE1E5] font-medium border-t-2 border-t-[#3574F0]'
+                        : 'text-[#9DA0A8] hover:bg-[#26282B] hover:text-[#CED0D6] border-t-2 border-t-transparent'
                     }`}
                   >
-                    <FileText className="w-3.5 h-3.5 text-emerald-400" />
-                    <span>Вывод программы</span>
+                    <Play className="w-3 h-3 text-[#57B77A] fill-[#57B77A]" />
+                    <span>Run: {activeFile?.name || 'main.py'}</span>
                     {output && (
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#57B77A]" />
                     )}
                   </button>
 
@@ -2350,16 +2094,16 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                       setActiveBottomTab('terminal');
                       setTimeout(() => terminalInputRef.current?.focus(), 50);
                     }}
-                    className={`px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                    className={`h-full px-3 text-[12px] font-sans flex items-center gap-1.5 border-r border-[#323232] transition-colors cursor-pointer ${
                       activeBottomTab === 'terminal'
-                        ? 'bg-slate-800 text-blue-400 border border-slate-700'
-                        : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900'
+                        ? 'bg-[#1E1F22] text-[#DFE1E5] font-medium border-t-2 border-t-[#3574F0]'
+                        : 'text-[#9DA0A8] hover:bg-[#26282B] hover:text-[#CED0D6] border-t-2 border-t-transparent'
                     }`}
                   >
-                    <Terminal className="w-3.5 h-3.5 text-blue-400" />
-                    <span>Терминал (bash / pip)</span>
+                    <Terminal className="w-3 h-3 text-[#3574F0]" />
+                    <span>Terminal</span>
                     {isTerminalExecuting && (
-                      <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+                      <span className="w-1.5 h-1.5 rounded-full bg-[#3574F0] animate-ping" />
                     )}
                   </button>
 
@@ -2367,119 +2111,172 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                   {plots.length > 0 && (
                     <button
                       onClick={() => setActiveBottomTab('plots')}
-                      className={`px-2.5 py-1 rounded-md text-[11px] font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+                      className={`h-full px-3 text-[12px] font-sans flex items-center gap-1.5 border-r border-[#323232] transition-colors cursor-pointer ${
                         activeBottomTab === 'plots'
-                          ? 'bg-amber-950/80 text-amber-300 border border-amber-500/50 shadow-xs'
-                          : 'text-amber-400/80 hover:text-amber-300 hover:bg-slate-900'
+                          ? 'bg-[#1E1F22] text-[#DFE1E5] font-medium border-t-2 border-t-[#E38C00]'
+                          : 'text-[#E38C00] hover:bg-[#26282B] border-t-2 border-t-transparent'
                       }`}
                     >
-                      <ImageIcon className="w-3.5 h-3.5 text-amber-400" />
-                      <span>Графики</span>
-                      <span className="px-1.5 py-0.2 bg-amber-500/20 text-amber-300 rounded text-[10px] font-mono font-bold">
-                        {plots.length}
-                      </span>
+                      <ImageIcon className="w-3 h-3 text-[#E38C00]" />
+                      <span>Plots ({plots.length})</span>
                     </button>
                   )}
                 </div>
 
-                <div className="flex items-center gap-2">
+                {/* PyCharm Tool Window Actions */}
+                <div className="flex items-center gap-1 text-[#868A91] pr-1">
                   {activeBottomTab === 'output' ? (
-                    <button
-                      onClick={() => setOutput('')}
-                      title="Очистить вывод программы"
-                      className="text-[11px] text-slate-400 hover:text-slate-200 transition flex items-center gap-1 font-medium px-2 py-0.5 rounded-md hover:bg-slate-900 cursor-pointer"
-                    >
-                      <RotateCcw className="w-3 h-3" /> Очистить
-                    </button>
+                    <>
+                      <button
+                        onClick={handleRunCode}
+                        disabled={isRunning}
+                        title="Перезапустить программу (Ctrl+Enter)"
+                        className="p-1 hover:bg-[#393B40] hover:text-[#57B77A] rounded transition cursor-pointer"
+                      >
+                        <RefreshCw className={`w-3.5 h-3.5 ${isRunning ? 'animate-spin text-[#57B77A]' : ''}`} />
+                      </button>
+                      <button
+                        onClick={() => setOutput('')}
+                        title="Очистить вывод"
+                        className="p-1 hover:bg-[#393B40] hover:text-[#DFE1E5] rounded transition cursor-pointer"
+                      >
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
+                    </>
                   ) : activeBottomTab === 'terminal' ? (
                     <button
                       onClick={() => setTerminalLogs([])}
-                      title="Очистить терминал"
-                      className="text-[11px] text-slate-400 hover:text-slate-200 transition flex items-center gap-1 font-medium px-2 py-0.5 rounded-md hover:bg-slate-900 cursor-pointer"
+                      title="Очистить консоль"
+                      className="p-1 hover:bg-[#393B40] hover:text-[#DFE1E5] rounded transition cursor-pointer"
                     >
-                      <RotateCcw className="w-3 h-3" /> Очистить
+                      <RotateCcw className="w-3.5 h-3.5" />
                     </button>
                   ) : (
                     <button
                       onClick={handleClearPlots}
                       title="Очистить графики"
-                      className="text-[11px] text-slate-400 hover:text-rose-300 transition flex items-center gap-1 font-medium px-2 py-0.5 rounded-md hover:bg-slate-900 cursor-pointer"
+                      className="p-1 hover:bg-[#393B40] hover:text-[#F36E65] rounded transition cursor-pointer"
                     >
-                      <Trash2 className="w-3 h-3" /> Очистить все
+                      <Trash2 className="w-3.5 h-3.5" />
                     </button>
                   )}
 
+                  <div className="h-3 w-px bg-[#393B40] mx-0.5" />
+
                   <button
                     onClick={handleTogglePopoutTerminal}
-                    title="Вынести в отдельное окно для работы на втором мониторе"
-                    className="text-[11px] text-blue-400 hover:text-blue-300 bg-blue-950/60 hover:bg-blue-900/60 border border-blue-800/60 px-2 py-0.5 rounded-md transition flex items-center gap-1 font-semibold cursor-pointer"
+                    title="Вынести в отдельное окно"
+                    className="p-1 hover:bg-[#393B40] hover:text-[#DFE1E5] rounded transition cursor-pointer"
                   >
-                    <ExternalLink className="w-3 h-3" />
-                    <span>Вынести в окно</span>
+                    <ExternalLink className="w-3.5 h-3.5" />
+                  </button>
+
+                  <button
+                    onClick={() => setTerminalHeight((prev) => (prev > 50 ? 32 : 220))}
+                    title="Свернуть / Развернуть"
+                    className="p-1 hover:bg-[#393B40] hover:text-[#DFE1E5] rounded transition cursor-pointer"
+                  >
+                    <Minus className="w-3.5 h-3.5" />
                   </button>
                 </div>
               </div>
 
               {/* Tab 1: Program Run Output */}
               {activeBottomTab === 'output' && (
-                <div className="flex-1 p-3 text-[12px] overflow-y-auto select-text text-emerald-400 whitespace-pre-wrap leading-relaxed flex flex-col gap-3">
-                  {/* Quick Plots Banner in Output if plots exist */}
-                  {plots.length > 0 && (
-                    <div className="p-2.5 bg-slate-900/90 border border-amber-500/40 rounded-xl flex items-center justify-between gap-3 text-slate-200 shrink-0">
-                      <div className="flex items-center gap-2.5 min-w-0">
-                        <div className="p-1.5 bg-amber-500/10 text-amber-400 rounded-lg shrink-0">
-                          <ImageIcon className="w-4 h-4" />
-                        </div>
-                        <div className="truncate">
-                          <div className="font-semibold text-xs text-amber-300 flex items-center gap-1.5">
-                            <span>Сгенерировано графиков: {plots.length}</span>
+                <div className="flex-1 flex overflow-hidden">
+                  {/* Left mini action toolbar in PyCharm style */}
+                  <div className="w-8 bg-[#2B2D30] border-r border-[#323232] flex flex-col items-center py-2 gap-2 text-[#868A91] shrink-0">
+                    <button
+                      onClick={handleRunCode}
+                      disabled={isRunning}
+                      title="Rerun 'main' (Ctrl+Enter)"
+                      className="p-1 hover:bg-[#393B40] hover:text-[#57B77A] rounded transition"
+                    >
+                      <Play className="w-3.5 h-3.5 text-[#57B77A] fill-[#57B77A]" />
+                    </button>
+                    <button
+                      onClick={() => setOutput('')}
+                      title="Clear All"
+                      className="p-1 hover:bg-[#393B40] hover:text-[#CED0D6] rounded transition"
+                    >
+                      <RotateCcw className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={copyCode}
+                      title="Copy Output"
+                      className="p-1 hover:bg-[#393B40] hover:text-[#CED0D6] rounded transition"
+                    >
+                      <Copy className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+
+                  <div className="flex-1 p-3 text-[12px] font-mono overflow-y-auto select-text text-[#A9B7C6] whitespace-pre-wrap leading-relaxed flex flex-col gap-3 bg-[#1E1F22]">
+                    {/* Quick Plots Banner in Output if plots exist */}
+                    {plots.length > 0 && (
+                      <div className="p-2.5 bg-[#2B2D30] border border-[#E38C00]/40 rounded-lg flex items-center justify-between gap-3 text-[#DFE1E5] shrink-0 font-sans">
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <div className="p-1.5 bg-[#E38C00]/15 text-[#E38C00] rounded shrink-0">
+                            <ImageIcon className="w-4 h-4" />
                           </div>
-                          <span className="text-[11px] text-slate-400 truncate block">
-                            Нажмите на график, чтобы раскрыть, переместить или скопировать
-                          </span>
+                          <div className="truncate">
+                            <div className="font-semibold text-xs text-[#E38C00] flex items-center gap-1.5">
+                              <span>Сгенерировано графиков: {plots.length}</span>
+                            </div>
+                            <span className="text-[11px] text-[#868A91] truncate block">
+                              Нажмите на график для просмотра или копирования
+                            </span>
+                          </div>
                         </div>
-                      </div>
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          onClick={() => handleOpenPlot(plots[plots.length - 1].id)}
-                          className="px-2.5 py-1 bg-amber-600 hover:bg-amber-500 text-slate-950 font-semibold rounded-lg text-xs transition flex items-center gap-1 cursor-pointer"
-                        >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>Открыть график</span>
-                        </button>
-                        <button
-                          onClick={() => setActiveBottomTab('plots')}
-                          className="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 font-semibold rounded-lg text-xs border border-slate-700 transition cursor-pointer"
-                        >
-                          Все графики
-                        </button>
-                      </div>
-                    </div>
-                  )}
-
-                  <div className="flex-1">
-                    {output ? (
-                      output
-                    ) : (
-                      <div className="text-slate-600 flex flex-col gap-1">
-                        <span>Нажмите «Запустить» или Ctrl+Enter для выполнения программы...</span>
-                        <span className="text-[11px] text-slate-700">
-                          (Переключитесь на вкладку «Терминал», чтобы установить библиотеки через pip install)
-                        </span>
+                        <div className="flex items-center gap-2 shrink-0">
+                          <button
+                            onClick={() => handleOpenPlot(plots[plots.length - 1].id)}
+                            className="px-2.5 py-1 bg-[#E38C00] hover:bg-[#D07C00] text-black font-semibold rounded text-xs transition flex items-center gap-1 cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Открыть график</span>
+                          </button>
+                          <button
+                            onClick={() => setActiveBottomTab('plots')}
+                            className="px-2.5 py-1 bg-[#393B40] hover:bg-[#4E5157] text-[#DFE1E5] font-semibold rounded text-xs transition cursor-pointer"
+                          >
+                            Все графики
+                          </button>
+                        </div>
                       </div>
                     )}
+
+                    <div className="flex-1 font-mono">
+                      {output ? (
+                        <div>
+                          <div className="text-[#868A91] text-[11px] mb-1">
+                            /usr/bin/python3 /Users/project/{activeFile?.name || 'main.py'}
+                          </div>
+                          <div className="text-[#A9B7C6]">{output}</div>
+                          <div className="text-[#868A91] text-[11px] mt-2">
+                            Process finished with exit code 0
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="text-[#606366] flex flex-col gap-1">
+                          <span>Нажмите «Запустить» или Ctrl+Enter для выполнения программы...</span>
+                          <span className="text-[11px] text-[#4E5157]">
+                            (Для установки пакетов переключитесь на вкладку «Terminal» и используйте pip install)
+                          </span>
+                        </div>
+                      )}
+                    </div>
                   </div>
                 </div>
               )}
 
               {/* Tab 2: Interactive Real Terminal (Pip, Bash, Python) */}
               {activeBottomTab === 'terminal' && (
-                <div className="flex-1 flex flex-col min-h-0 bg-[#070b10]">
+                <div className="flex-1 flex flex-col min-h-0 bg-[#1E1F22]">
                   {/* Quick Command Chips */}
-                  <div className="px-2.5 py-1.5 bg-slate-950/80 border-b border-slate-800/60 flex items-center gap-1.5 overflow-x-auto text-[11px] shrink-0 no-scrollbar">
-                    <span className="text-slate-500 font-semibold mr-1 text-[10px] shrink-0 flex items-center gap-1">
-                      <Box className="w-3 h-3 text-blue-400" /> Быстрые команды:
+                  <div className="px-2.5 py-1 bg-[#2B2D30] border-b border-[#323232] flex items-center gap-1.5 overflow-x-auto text-[11px] shrink-0 no-scrollbar font-sans">
+                    <span className="text-[#868A91] font-semibold mr-1 text-[10px] shrink-0 flex items-center gap-1">
+                      <Box className="w-3 h-3 text-[#3574F0]" /> Быстрые команды:
                     </span>
                     {[
                       'pip install numpy',
@@ -2494,9 +2291,9 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                         key={cmd}
                         onClick={() => handleExecuteTerminalCommand(cmd)}
                         disabled={isTerminalExecuting}
-                        className="px-2 py-0.5 bg-slate-900 hover:bg-slate-800 disabled:opacity-40 text-slate-300 hover:text-blue-300 border border-slate-800 hover:border-blue-500/50 rounded text-[10.5px] whitespace-nowrap transition cursor-pointer flex items-center gap-1"
+                        className="px-2 py-0.5 bg-[#1E1F22] hover:bg-[#393B40] disabled:opacity-40 text-[#CED0D6] hover:text-[#3574F0] border border-[#393B40] hover:border-[#3574F0]/50 rounded text-[10.5px] whitespace-nowrap transition cursor-pointer flex items-center gap-1 font-mono"
                       >
-                        <Download className="w-2.5 h-2.5 text-blue-400" />
+                        <Download className="w-2.5 h-2.5 text-[#3574F0]" />
                         <span>{cmd}</span>
                       </button>
                     ))}
@@ -2505,26 +2302,26 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                   {/* Terminal Log Stream */}
                   <div
                     ref={terminalScrollRef}
-                    className="flex-1 p-3 text-[12px] overflow-y-auto font-mono select-text flex flex-col gap-2.5"
+                    className="flex-1 p-3 text-[12px] overflow-y-auto font-mono select-text flex flex-col gap-2 bg-[#1E1F22]"
                   >
                     {terminalLogs.map((log) => (
                       <div key={log.id} className="flex flex-col gap-0.5">
                         <div className="flex items-center gap-2 text-[11px]">
-                          <span className="text-emerald-400 font-bold">$</span>
-                          <span className="text-slate-200 font-semibold">{log.cmd}</span>
-                          <span className="text-slate-600 text-[10px] ml-auto">{log.time}</span>
+                          <span className="text-[#57B77A] font-bold">$</span>
+                          <span className="text-[#DFE1E5] font-semibold">{log.cmd}</span>
+                          <span className="text-[#868A91] text-[10px] ml-auto">{log.time}</span>
                           {log.exitCode === 0 ? (
-                            <span className="text-[10px] text-emerald-400 bg-emerald-950/60 border border-emerald-800/60 px-1 rounded flex items-center gap-0.5">
+                            <span className="text-[10px] text-[#57B77A] bg-[#57B77A]/15 border border-[#57B77A]/30 px-1 rounded flex items-center gap-0.5">
                               <CheckCircle2 className="w-2.5 h-2.5" /> 0
                             </span>
                           ) : (
-                            <span className="text-[10px] text-rose-400 bg-rose-950/60 border border-rose-800/60 px-1 rounded flex items-center gap-0.5">
+                            <span className="text-[10px] text-[#F36E65] bg-[#F36E65]/15 border border-[#F36E65]/30 px-1 rounded flex items-center gap-0.5">
                               <AlertCircle className="w-2.5 h-2.5" /> {log.exitCode}
                             </span>
                           )}
                         </div>
                         {log.output && (
-                          <pre className="text-slate-300 text-[11.5px] whitespace-pre-wrap pl-3 border-l border-slate-800/80 leading-relaxed break-words font-mono mt-0.5">
+                          <pre className="text-[#A9B7C6] text-[11.5px] whitespace-pre-wrap pl-3 border-l border-[#393B40] leading-relaxed break-words font-mono mt-0.5">
                             {log.output}
                           </pre>
                         )}
@@ -2532,16 +2329,16 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                     ))}
 
                     {isTerminalExecuting && (
-                      <div className="flex items-center gap-2 text-[11px] text-blue-400 animate-pulse pl-1">
-                        <span className="w-2 h-2 rounded-full bg-blue-400 animate-ping" />
+                      <div className="flex items-center gap-2 text-[11px] text-[#3574F0] animate-pulse pl-1">
+                        <span className="w-2 h-2 rounded-full bg-[#3574F0] animate-ping" />
                         <span>Выполняется команда...</span>
                       </div>
                     )}
                   </div>
 
                   {/* Command Input Prompt */}
-                  <div className="p-2 bg-slate-950 border-t border-slate-800/90 flex items-center gap-2 shrink-0">
-                    <span className="text-emerald-400 font-bold text-xs select-none pl-1">$</span>
+                  <div className="p-2 bg-[#2B2D30] border-t border-[#323232] flex items-center gap-2 shrink-0">
+                    <span className="text-[#57B77A] font-bold text-xs select-none pl-1 font-mono">$</span>
                     <input
                       ref={terminalInputRef}
                       type="text"
@@ -2550,12 +2347,12 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                       onKeyDown={handleTerminalKeyDown}
                       placeholder="pip install sympy, python main.py, pip list, ls, clear..."
                       disabled={isTerminalExecuting}
-                      className="flex-1 bg-transparent text-slate-100 font-mono text-[12px] focus:outline-none placeholder-slate-600"
+                      className="flex-1 bg-transparent text-[#DFE1E5] font-mono text-[12px] focus:outline-none placeholder-[#606366]"
                     />
                     <button
                       onClick={() => handleExecuteTerminalCommand()}
                       disabled={isTerminalExecuting || !terminalInput.trim()}
-                      className="px-3 py-1 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 text-white rounded text-xs font-semibold transition cursor-pointer flex items-center gap-1 shadow-xs"
+                      className="px-3 py-1 bg-[#3574F0] hover:bg-[#3064D0] disabled:opacity-40 text-white rounded text-xs font-semibold transition cursor-pointer flex items-center gap-1 shadow-xs font-sans"
                     >
                       {isTerminalExecuting ? 'Выполняется...' : 'Выполнить'}
                     </button>
@@ -2565,12 +2362,12 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
 
               {/* Tab 3: Generated Plots Gallery Tab */}
               {activeBottomTab === 'plots' && (
-                <div className="flex-1 p-3 bg-[#080d14] overflow-y-auto">
+                <div className="flex-1 p-3 bg-[#1E1F22] overflow-y-auto">
                   {plots.length === 0 ? (
-                    <div className="h-full flex flex-col items-center justify-center text-slate-500 gap-2 p-6 text-center">
-                      <ImageIcon className="w-8 h-8 text-slate-600" />
+                    <div className="h-full flex flex-col items-center justify-center text-[#868A91] gap-2 p-6 text-center">
+                      <ImageIcon className="w-8 h-8 text-[#606366]" />
                       <span className="text-xs">Графики еще не были созданы.</span>
-                      <span className="text-[11px] text-slate-600 font-mono">
+                      <span className="text-[11px] text-[#606366] font-mono">
                         Запустите Python-код с matplotlib (plt.show() или plt.savefig('chart.png'))
                       </span>
                     </div>
@@ -2579,7 +2376,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                       {plots.map((plot) => (
                         <div
                           key={plot.id}
-                          className="bg-slate-900/90 border border-slate-800 rounded-xl overflow-hidden shadow-lg flex flex-col group hover:border-amber-500/50 transition"
+                          className="bg-[#2B2D30] border border-[#393B40] rounded-lg overflow-hidden shadow-lg flex flex-col group hover:border-[#E38C00]/60 transition"
                         >
                           <div
                             onClick={() => handleOpenPlot(plot.id)}
@@ -2590,33 +2387,33 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                               alt={plot.name}
                               className="max-w-full max-h-full object-contain group-hover:scale-105 transition-transform"
                             />
-                            <div className="absolute inset-0 bg-slate-950/40 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition">
-                              <span className="px-2.5 py-1 bg-amber-500 text-slate-950 font-semibold text-[11px] rounded-lg shadow flex items-center gap-1">
+                            <div className="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center gap-2 transition">
+                              <span className="px-2.5 py-1 bg-[#E38C00] text-black font-semibold text-[11px] rounded shadow flex items-center gap-1">
                                 <Maximize2 className="w-3 h-3" /> Раскрыть
                               </span>
                             </div>
                           </div>
 
-                          <div className="p-2.5 bg-slate-950/90 flex flex-col gap-1.5 border-t border-slate-800/80">
+                          <div className="p-2 bg-[#2B2D30] flex flex-col gap-1.5 border-t border-[#323232]">
                             <div className="flex items-center justify-between gap-1">
-                              <span className="font-mono text-xs font-semibold text-white truncate">
+                              <span className="font-mono text-xs font-semibold text-[#DFE1E5] truncate">
                                 {plot.name}
                               </span>
-                              <span className="text-[10px] text-slate-400 font-mono">
+                              <span className="text-[10px] text-[#868A91] font-mono">
                                 {plot.size ? `${Math.round(plot.size / 1024)} КБ` : ''}
                               </span>
                             </div>
 
-                            <div className="flex items-center gap-1 pt-1 border-t border-slate-800/60">
+                            <div className="flex items-center gap-1 pt-1 border-t border-[#393B40]">
                               <button
                                 onClick={(e) => handleCopyPlotImage(plot, e)}
                                 title="Скопировать изображение"
-                                className="flex-1 py-1 px-1.5 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white rounded-lg text-[11px] font-medium border border-slate-800 transition flex items-center justify-center gap-1 cursor-pointer"
+                                className="flex-1 py-1 px-1.5 bg-[#1E1F22] hover:bg-[#393B40] text-[#CED0D6] hover:text-white rounded text-[11px] font-medium border border-[#393B40] transition flex items-center justify-center gap-1 cursor-pointer"
                               >
                                 {copiedPlotId === plot.id ? (
                                   <>
-                                    <Check className="w-3 h-3 text-emerald-400" />
-                                    <span className="text-emerald-400">Скопировано</span>
+                                    <Check className="w-3 h-3 text-[#57B77A]" />
+                                    <span className="text-[#57B77A]">Скопировано</span>
                                   </>
                                 ) : (
                                   <>
@@ -2630,7 +2427,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                                 <button
                                   onClick={(e) => handleSendPlotToWhiteboard(plot, e)}
                                   title="Вставить на интерактивную доску"
-                                  className="p-1 bg-indigo-950/60 hover:bg-indigo-900/80 text-indigo-300 border border-indigo-800/60 rounded-lg text-[11px] transition cursor-pointer"
+                                  className="p-1 bg-[#3574F0]/20 hover:bg-[#3574F0]/40 text-[#3574F0] border border-[#3574F0]/40 rounded text-[11px] transition cursor-pointer"
                                 >
                                   <Layers className="w-3.5 h-3.5" />
                                 </button>
@@ -2639,7 +2436,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                               <button
                                 onClick={(e) => handleDownloadPlot(plot, e)}
                                 title="Скачать файл PNG"
-                                className="p-1 bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white border border-slate-800 rounded-lg text-[11px] transition cursor-pointer"
+                                className="p-1 bg-[#1E1F22] hover:bg-[#393B40] text-[#CED0D6] hover:text-white border border-[#393B40] rounded text-[11px] transition cursor-pointer"
                               >
                                 <Download className="w-3.5 h-3.5" />
                               </button>
@@ -2647,7 +2444,7 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
                               <button
                                 onClick={(e) => handleDeletePlot(plot.id, e)}
                                 title="Удалить"
-                                className="p-1 hover:bg-rose-950/60 text-slate-400 hover:text-rose-400 rounded-lg text-[11px] transition cursor-pointer"
+                                className="p-1 hover:bg-[#F36E65]/20 text-[#868A91] hover:text-[#F36E65] rounded text-[11px] transition cursor-pointer"
                               >
                                 <Trash2 className="w-3.5 h-3.5" />
                               </button>
@@ -2663,6 +2460,19 @@ export const CodeIDE: React.FC<CodeIDEProps> = ({
           )}
         </main>
       </div>
+
+      {/* PyCharm Bottom Status Bar */}
+      <PyCharmStatusBar
+        line={localCursor.line}
+        column={localCursor.col}
+        language={activeFile?.language || 'python'}
+        encoding="UTF-8"
+        lineEnding="LF"
+        branch="master"
+        otherCursorsCount={Object.keys(otherCursors).length}
+        activeBottomTab={activeBottomTab}
+        onSelectBottomTab={(tab) => setActiveBottomTab(tab)}
+      />
 
       {/* New File Modal */}
       {showNewFileModal && (

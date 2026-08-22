@@ -397,7 +397,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
 
       {/* Audio Devices & Noise Suppression Settings Modal */}
       {showDeviceSettings && (
-        <div className="absolute right-0 bottom-full mb-3 w-88 max-w-[95vw] bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200 p-4 z-50 animate-in fade-in max-h-[80vh] overflow-y-auto scrollbar-thin">
+        <div className="absolute right-0 bottom-full mb-3 w-88 max-w-[95vw] bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200 p-4 z-[600] animate-in fade-in max-h-[80vh] overflow-y-auto scrollbar-thin">
           <div className="flex items-center justify-between mb-3 pb-2 border-b border-slate-100">
             <h4 className="text-xs font-bold text-slate-900 flex items-center gap-1.5">
               <Sliders className="w-3.5 h-3.5 text-blue-600" />
@@ -581,7 +581,7 @@ export const VoiceControls: React.FC<VoiceControlsProps> = ({
       {/* Mic Help Dropdown */}
       {showMicHelp && (
         <div
-          className="absolute right-2 bottom-full mb-2 w-80 bg-white rounded-2xl shadow-2xl border border-slate-200 p-4 z-50 animate-in fade-in"
+          className="absolute right-2 bottom-full mb-2 w-80 bg-white rounded-2xl shadow-2xl border border-slate-200 p-4 z-[600] animate-in fade-in"
           onMouseLeave={() => setShowMicHelp(false)}
         >
           <div className="flex items-center justify-between mb-2">

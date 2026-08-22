@@ -183,48 +183,59 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
   return (
     <header
       id="tutorboard-header"
-      className={`relative z-50 px-4 py-2 flex flex-wrap items-center justify-between gap-3 select-none transition-colors duration-200 shadow-xs border-b ${
+      className={`relative z-50 h-13 px-4 flex items-center justify-between gap-4 select-none transition-colors duration-200 border-b shrink-0 ${
         isDarkTheme
-          ? 'bg-slate-900 border-slate-800 text-slate-100'
-          : 'bg-white/95 backdrop-blur-md border-slate-200 text-slate-900'
+          ? 'bg-slate-950/95 backdrop-blur-md border-slate-800 text-slate-100'
+          : 'bg-white/95 backdrop-blur-md border-slate-200/90 text-slate-900'
       }`}
     >
-      {/* Left: Site Icon and Room Title ONLY (Clean, single-line, no old room code) */}
-      <div className="flex items-center gap-3">
+      {/* Left: Brand Identity & Document Context */}
+      <div className="flex items-center gap-3 shrink-0">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-xl bg-blue-600 text-white flex items-center justify-center font-bold shadow-sm shrink-0">
-            <GraduationCap className="w-5 h-5" />
+          <div className="w-8 h-8 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-xs transition-colors shrink-0">
+            <GraduationCap className="w-4.5 h-4.5" />
           </div>
-          <div>
-            <h1
-              className={`text-sm font-bold leading-tight truncate max-w-[200px] sm:max-w-[280px] ${
-                isDarkTheme ? 'text-white' : 'text-slate-900'
-              }`}
-            >
-              {roomTitle}
-            </h1>
+          <div className="flex flex-col">
+            <div className="flex items-center gap-2">
+              <h1
+                className={`text-[13px] font-semibold tracking-tight leading-tight truncate max-w-[160px] sm:max-w-[240px] md:max-w-[320px] ${
+                  isDarkTheme ? 'text-slate-100' : 'text-slate-900'
+                }`}
+              >
+                {roomTitle}
+              </h1>
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-medium bg-emerald-50 text-emerald-700 dark:bg-emerald-950/50 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/40">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                Live
+              </span>
+            </div>
+            {subject && (
+              <span className="text-[11px] text-slate-500 dark:text-slate-400 font-normal truncate max-w-[200px] leading-tight">
+                {subject}
+              </span>
+            )}
           </div>
         </div>
       </div>
 
-      {/* Middle: 2-Button Toggle (Board vs IDE) + Lesson Timer */}
-      <div className="flex items-center gap-3">
-        {/* Segmented 2-button switch: Доска / Среда разработки */}
+      {/* Middle: Minimalist Segmented View Switch + Compact Sync Timer */}
+      <div className="flex items-center gap-2.5 shrink-0">
+        {/* Modern Segmented View Switch (Board vs IDE) */}
         <div
-          className={`flex items-center p-1 rounded-xl border ${
+          className={`flex items-center p-0.5 rounded-xl border ${
             isDarkTheme
-              ? 'bg-slate-800 border-slate-700'
-              : 'bg-slate-100 border-slate-200/80'
+              ? 'bg-slate-900 border-slate-800'
+              : 'bg-slate-100/90 border-slate-200/80'
           }`}
         >
           <button
             type="button"
             onClick={() => onSelectView('board')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 cursor-pointer ${
               activeView === 'board'
                 ? isDarkTheme
-                  ? 'bg-slate-700 text-white shadow-xs'
-                  : 'bg-white text-blue-600 shadow-xs border border-slate-200/60 font-bold'
+                  ? 'bg-slate-800 text-white shadow-xs font-semibold'
+                  : 'bg-white text-indigo-600 shadow-xs border border-slate-200/60 font-semibold'
                 : isDarkTheme
                 ? 'text-slate-400 hover:text-slate-200'
                 : 'text-slate-600 hover:text-slate-900'
@@ -237,11 +248,11 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
           <button
             type="button"
             onClick={() => onSelectView('ide')}
-            className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 cursor-pointer ${
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition flex items-center gap-1.5 cursor-pointer ${
               activeView === 'ide'
                 ? isDarkTheme
-                  ? 'bg-blue-600 text-white shadow-xs font-bold'
-                  : 'bg-slate-900 text-white shadow-xs font-bold'
+                  ? 'bg-indigo-600 text-white shadow-xs font-semibold'
+                  : 'bg-slate-900 text-white shadow-xs font-semibold'
                 : isDarkTheme
                 ? 'text-slate-400 hover:text-slate-200'
                 : 'text-slate-600 hover:text-slate-900'
@@ -252,24 +263,24 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
           </button>
         </div>
 
-        {/* Synchronized Lesson Timer */}
+        {/* Unified Minimalist Lesson Timer */}
         <div
-          className={`flex items-center gap-1.5 px-3 py-1.5 rounded-xl border ${
+          className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl border ${
             isDarkTheme
-              ? 'bg-slate-800 border-slate-700 text-slate-200'
-              : 'bg-slate-100 border-slate-200 text-slate-800'
+              ? 'bg-slate-900 border-slate-800 text-slate-200'
+              : 'bg-slate-100/80 border-slate-200/90 text-slate-800'
           }`}
         >
           <Clock
-            className={`w-4 h-4 ${
-              isTimerRunning ? 'text-blue-500 animate-pulse' : 'text-slate-400'
+            className={`w-3.5 h-3.5 ${
+              isTimerRunning ? 'text-indigo-500 animate-pulse' : 'text-slate-400'
             }`}
           />
-          <span className="font-mono text-xs font-bold w-12 text-center">
+          <span className="font-mono text-xs font-semibold w-11 text-center tracking-tight">
             {formatTime(timerSeconds)}
           </span>
 
-          {/* Tutor: Play/Pause controls with sync & manual duration */}
+          {/* Tutor Controls */}
           {userRole === 'tutor' ? (
             <>
               <button
@@ -279,25 +290,25 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
                     ? 'Приостановить таймер урока'
                     : 'Запустить таймер урока для всех'
                 }
-                className={`p-1 rounded-lg transition cursor-pointer ${
-                  isDarkTheme ? 'hover:bg-slate-700' : 'hover:bg-white'
+                className={`p-1 rounded-md transition cursor-pointer ${
+                  isDarkTheme ? 'hover:bg-slate-800' : 'hover:bg-white text-slate-600 hover:text-slate-900'
                 }`}
               >
                 {isTimerRunning ? (
-                  <Pause className="w-3.5 h-3.5 text-amber-500" />
+                  <Pause className="w-3 h-3 text-amber-500" />
                 ) : (
-                  <Play className="w-3.5 h-3.5 text-emerald-500" />
+                  <Play className="w-3 h-3 text-emerald-500" />
                 )}
               </button>
 
-              {/* Presets & Manual Time Menu */}
+              {/* Timer Menu Popover */}
               <div className="relative">
                 <button
                   onClick={() => setShowTimerMenu(!showTimerMenu)}
                   title="Настройки времени урока"
-                  className={`p-1 rounded-lg transition text-[11px] flex items-center cursor-pointer ${
+                  className={`p-1 rounded-md transition text-[11px] flex items-center cursor-pointer ${
                     isDarkTheme
-                      ? 'hover:bg-slate-700 text-slate-400'
+                      ? 'hover:bg-slate-800 text-slate-400'
                       : 'hover:bg-white text-slate-500 hover:text-slate-900'
                   }`}
                 >
@@ -306,14 +317,13 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
 
                 {showTimerMenu && (
                   <div
-                    className="absolute right-0 top-full mt-2 w-64 bg-white rounded-2xl shadow-2xl border border-slate-200 p-3 z-[100] animate-in fade-in text-slate-800"
+                    className="absolute right-0 top-full mt-2 w-64 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-slate-200 p-3.5 z-[600] animate-in fade-in text-slate-800 filter drop-shadow-xl"
                     onMouseLeave={() => setShowTimerMenu(false)}
                   >
-                    <div className="text-[10px] font-bold text-slate-500 px-1 mb-1.5 uppercase tracking-wider">
-                      Длительность урока
+                    <div className="text-[10px] font-bold text-slate-400 px-1 mb-2 uppercase tracking-wider">
+                      Длительность занятия
                     </div>
 
-                    {/* Manual Custom Time Input */}
                     <form onSubmit={handleCustomTimeSubmit} className="mb-2.5 flex items-center gap-1.5">
                       <div className="relative flex-1">
                         <input
@@ -323,7 +333,7 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
                           value={customMinutesInput}
                           onChange={(e) => setCustomMinutesInput(e.target.value)}
                           placeholder="Минут"
-                          className="w-full bg-slate-50 border border-slate-200 focus:border-blue-500 rounded-xl px-3 py-1.5 text-xs text-slate-900 outline-none font-bold"
+                          className="w-full bg-slate-50 border border-slate-200 focus:border-indigo-500 rounded-xl px-3 py-1.5 text-xs text-slate-900 outline-none font-semibold"
                         />
                         <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-medium">
                           мин
@@ -331,13 +341,12 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
                       </div>
                       <button
                         type="submit"
-                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
+                        className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold transition shadow-xs cursor-pointer"
                       >
                         Задать
                       </button>
                     </form>
 
-                    {/* Quick Preset Buttons */}
                     <div className="space-y-1">
                       {[
                         { label: '30 минут', sec: 30 * 60 },
@@ -349,14 +358,14 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
                           key={item.sec}
                           type="button"
                           onClick={() => handleSetTimerDuration(item.sec)}
-                          className="w-full text-left px-2.5 py-1.5 text-xs text-slate-700 hover:bg-blue-50 hover:text-blue-700 rounded-xl font-medium transition cursor-pointer"
+                          className="w-full text-left px-2.5 py-1.5 text-xs text-slate-700 hover:bg-indigo-50 hover:text-indigo-700 rounded-xl font-medium transition cursor-pointer"
                         >
                           {item.label}
                         </button>
                       ))}
                     </div>
 
-                    <div className="border-t border-slate-100 my-1.5" />
+                    <div className="border-t border-slate-100 my-2" />
                     <button
                       type="button"
                       onClick={handleResetTimer}
@@ -369,179 +378,184 @@ export const RoomHeader: React.FC<RoomHeaderProps> = ({
               </div>
             </>
           ) : (
-            <span className="text-[10px] font-medium opacity-70 pl-1">
-              {isTimerRunning ? 'Урок идет' : 'Пауза'}
+            <span className="text-[10px] font-medium text-slate-400 pl-0.5">
+              {isTimerRunning ? 'Идет' : 'Пауза'}
             </span>
           )}
         </div>
       </div>
 
-      {/* Right: Tools, Settings, Tutor Controls & Actions */}
-      <div className="flex items-center gap-2">
-        {/* Tutor: View all users and board access */}
+      {/* Right: Unified Action Controls */}
+      <div className="flex items-center gap-1.5 shrink-0">
+        {/* Tutor Controls Group */}
         {userRole === 'tutor' && (
-          <>
+          <div className="flex items-center gap-1">
+            {/* Quick action buttons in unified toolbar */}
+            <div
+              className={`flex items-center gap-0.5 p-0.5 rounded-xl border ${
+                isDarkTheme
+                  ? 'bg-slate-900 border-slate-800'
+                  : 'bg-slate-100/90 border-slate-200/80'
+              }`}
+            >
+              {/* Lock/Unlock Drawing */}
+              <button
+                onClick={handleToggleLock}
+                title={isLocked ? 'Разблокировать доску для всех' : 'Заблокировать доску (только преподаватель)'}
+                className={`px-2.5 py-1 rounded-lg text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
+                  isLocked
+                    ? 'bg-amber-500 text-white shadow-xs font-semibold'
+                    : isDarkTheme
+                    ? 'text-slate-300 hover:text-white hover:bg-slate-800'
+                    : 'text-slate-700 hover:text-slate-900 hover:bg-white'
+                }`}
+              >
+                {isLocked ? <Lock className="w-3.5 h-3.5" /> : <Unlock className="w-3.5 h-3.5 text-slate-500" />}
+                <span className="hidden lg:inline">{isLocked ? 'Закрыта' : 'Открыта'}</span>
+              </button>
+
+              {/* Praise Confetti */}
+              <button
+                onClick={handleCheerStudent}
+                title="Похвалить ученика! (Салют и звезды)"
+                className={`p-1.5 rounded-lg transition cursor-pointer ${
+                  isDarkTheme
+                    ? 'text-slate-300 hover:text-amber-300 hover:bg-slate-800'
+                    : 'text-slate-600 hover:text-amber-600 hover:bg-white'
+                }`}
+              >
+                <Star className="w-3.5 h-3.5" />
+              </button>
+
+              {/* Attention Ping */}
+              <button
+                onClick={handleAttentionPing}
+                title="Привлечь внимание к доске"
+                className={`p-1.5 rounded-lg transition cursor-pointer ${
+                  isDarkTheme
+                    ? 'text-slate-300 hover:text-indigo-300 hover:bg-slate-800'
+                    : 'text-slate-600 hover:text-indigo-600 hover:bg-white'
+                }`}
+              >
+                <Bell className="w-3.5 h-3.5" />
+              </button>
+            </div>
+
+            {/* Invite Key & Users Modals */}
             <button
               onClick={() => setShowInviteCodeModal(true)}
               title="Создать одноразовый ключ доступа для ученика"
-              className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+              className={`h-8 px-2.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
                 isDarkTheme
-                  ? 'bg-amber-950/50 border-amber-800/80 text-amber-300 hover:bg-amber-900/60'
-                  : 'bg-amber-50 border-amber-200 text-amber-900 hover:bg-amber-100'
+                  ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900 shadow-2xs'
               }`}
             >
-              <KeyRound className="w-4 h-4 text-amber-500" />
-              <span className="hidden xl:inline">Одноразовый ключ</span>
+              <KeyRound className="w-3.5 h-3.5 text-indigo-500" />
+              <span className="hidden xl:inline">Ключ</span>
             </button>
 
             <button
               onClick={() => setShowUsersModal(true)}
-              title="Список всех пользователей и управление доступом к доскам"
-              className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+              title="Список всех пользователей и доступ к доскам"
+              className={`h-8 px-2.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
                 isDarkTheme
-                  ? 'bg-slate-800 border-slate-700 text-slate-200 hover:bg-slate-700'
-                  : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                  ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+                  : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900 shadow-2xs'
               }`}
             >
-              <UserCheck className="w-4 h-4 text-blue-500" />
-              <span className="hidden xl:inline">Пользователи</span>
-            </button>
-          </>
-        )}
-
-        {/* Settings button */}
-        <button
-          onClick={onOpenSettings}
-          title="Настройки горячих клавиш инструментов"
-          className={`p-2 rounded-xl border transition cursor-pointer ${
-            isDarkTheme
-              ? 'border-slate-700 hover:bg-slate-800 text-slate-300'
-              : 'border-slate-200 hover:bg-slate-50 text-slate-700'
-          }`}
-        >
-          <Settings className="w-4 h-4" />
-        </button>
-
-        {/* Tutor Only Superpowers */}
-        {userRole === 'tutor' && (
-          <div
-            className={`flex items-center gap-1 p-1 rounded-xl border ${
-              isDarkTheme
-                ? 'bg-amber-950/40 border-amber-800/60'
-                : 'bg-amber-50 border-amber-200'
-            }`}
-          >
-            {/* Lock/Unlock drawing */}
-            <button
-              onClick={handleToggleLock}
-              title={
-                isLocked
-                  ? 'Разблокировать доску для учеников'
-                  : 'Заблокировать доску (Только преподаватель)'
-              }
-              className={`p-1.5 rounded-lg text-xs font-semibold flex items-center gap-1 transition cursor-pointer ${
-                isLocked
-                  ? 'bg-amber-500 text-white shadow-xs'
-                  : isDarkTheme
-                  ? 'text-amber-300 hover:bg-amber-900/50'
-                  : 'text-amber-900 hover:bg-amber-100'
-              }`}
-            >
-              {isLocked ? (
-                <Lock className="w-3.5 h-3.5" />
-              ) : (
-                <Unlock className="w-3.5 h-3.5" />
-              )}
-              <span className="hidden lg:inline">
-                {isLocked ? 'Доска закрыта' : 'Доска открыта'}
-              </span>
-            </button>
-
-            {/* Praise Student Confetti */}
-            <button
-              onClick={handleCheerStudent}
-              title="Похвалить ученика! (Салют и звезды на экране)"
-              className={`p-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1 cursor-pointer ${
-                isDarkTheme
-                  ? 'text-amber-300 hover:bg-amber-900/50'
-                  : 'text-amber-900 hover:bg-amber-200/70'
-              }`}
-            >
-              <Star className="w-3.5 h-3.5 text-amber-500 fill-amber-400" />
-              <span className="hidden lg:inline">Похвалить</span>
-            </button>
-
-            {/* Attention Ping */}
-            <button
-              onClick={handleAttentionPing}
-              title="Привлечь внимание ученика к доске"
-              className={`p-1.5 rounded-lg text-xs font-semibold transition flex items-center gap-1 cursor-pointer ${
-                isDarkTheme
-                  ? 'text-amber-300 hover:bg-amber-900/50'
-                  : 'text-amber-900 hover:bg-amber-200/70'
-              }`}
-            >
-              <Bell className="w-3.5 h-3.5 text-amber-500" />
+              <UserCheck className="w-3.5 h-3.5 text-indigo-500" />
+              <span className="hidden xl:inline">Доступ</span>
             </button>
           </div>
         )}
+
+        {/* Subtle Divider */}
+        <div className={`h-5 w-px mx-0.5 shrink-0 ${isDarkTheme ? 'bg-slate-800' : 'bg-slate-200'}`} />
 
         {/* Participants drawer toggle */}
         <button
           onClick={onToggleParticipants}
           title="Список участников занятия"
-          className={`px-2.5 py-1.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 transition cursor-pointer ${
+          className={`h-8 px-2.5 rounded-xl border text-xs font-medium flex items-center gap-1.5 transition cursor-pointer ${
             isDarkTheme
-              ? 'border-slate-700 hover:bg-slate-800 text-slate-200'
-              : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+              ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900 shadow-2xs'
           }`}
         >
-          <Users className="w-4 h-4 text-blue-500" />
-          <span>{participantCount}</span>
+          <Users className="w-3.5 h-3.5 text-indigo-500" />
+          <span className="font-semibold">{participantCount}</span>
         </button>
 
         {/* Chat drawer toggle */}
         <button
           onClick={onToggleChat}
           title="Чат занятия"
-          className={`relative p-2 rounded-xl border transition cursor-pointer ${
+          className={`relative h-8 w-8 rounded-xl border flex items-center justify-center transition cursor-pointer ${
             isDarkTheme
-              ? 'border-slate-700 hover:bg-slate-800 text-slate-200'
-              : 'border-slate-200 hover:bg-slate-50 text-slate-700'
+              ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900 shadow-2xs'
           }`}
         >
-          <MessageSquare className="w-4 h-4 text-blue-500" />
+          <MessageSquare className="w-3.5 h-3.5 text-indigo-500" />
           {unreadChatCount > 0 && (
-            <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-white rounded-full text-[10px] font-bold flex items-center justify-center animate-bounce">
+            <span className="absolute -top-1 -right-1 w-4 h-4 bg-rose-500 text-white rounded-full text-[9px] font-bold flex items-center justify-center shadow-xs">
               {unreadChatCount}
             </span>
           )}
         </button>
 
-        {/* User Profile Avatar with Click-to-Change */}
+        {/* Settings button */}
+        <button
+          onClick={onOpenSettings}
+          title="Настройки горячих клавиш и панели инструментов"
+          className={`h-8 w-8 rounded-xl border flex items-center justify-center transition cursor-pointer ${
+            isDarkTheme
+              ? 'bg-slate-900 border-slate-800 text-slate-300 hover:bg-slate-800 hover:text-white'
+              : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:text-slate-900 shadow-2xs'
+          }`}
+        >
+          <Settings className="w-3.5 h-3.5" />
+        </button>
+
+        {/* Subtle Divider */}
+        <div className={`h-5 w-px mx-0.5 shrink-0 ${isDarkTheme ? 'bg-slate-800' : 'bg-slate-200'}`} />
+
+        {/* User Profile Pill */}
         {onOpenAvatarPicker && (
           <button
             onClick={onOpenAvatarPicker}
-            title={`${userName} (Нажмите, чтобы изменить имя, аватарку и цвет)`}
-            className="flex items-center gap-1.5 p-1 rounded-xl transition cursor-pointer hover:opacity-90"
+            title={`${userName} (${userRole === 'tutor' ? 'Преподаватель' : 'Ученик'}). Нажмите для изменения профиля`}
+            className={`h-8 pl-1 pr-2.5 rounded-xl border flex items-center gap-1.5 transition cursor-pointer ${
+              isDarkTheme
+                ? 'bg-slate-900 border-slate-800 hover:bg-slate-850 text-slate-200'
+                : 'bg-slate-50 border-slate-200 hover:bg-slate-100 text-slate-800 shadow-2xs'
+            }`}
           >
             <UserAvatar
               avatar={userAvatar}
               name={userName}
               color={userColor}
               size="sm"
-              className="shadow-2xs hover:scale-105 transition"
+              className="w-6 h-6 rounded-lg text-xs"
             />
+            <span className="text-xs font-medium max-w-[80px] sm:max-w-[100px] truncate">
+              {userName}
+            </span>
           </button>
         )}
 
-        {/* Leave room */}
+        {/* Leave Room Button */}
         <button
           onClick={onLeaveRoom}
           title="Выйти из комнаты"
-          className="p-2 rounded-xl text-slate-400 hover:text-rose-500 hover:bg-rose-500/10 transition cursor-pointer"
+          className={`h-8 w-8 rounded-xl flex items-center justify-center transition cursor-pointer ${
+            isDarkTheme
+              ? 'text-slate-400 hover:text-rose-400 hover:bg-rose-950/40'
+              : 'text-slate-400 hover:text-rose-600 hover:bg-rose-50'
+          }`}
         >
-          <LogOut className="w-4 h-4" />
+          <LogOut className="w-3.5 h-3.5" />
         </button>
       </div>
 

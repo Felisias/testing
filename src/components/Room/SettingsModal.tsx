@@ -42,6 +42,7 @@ interface SettingsModalProps {
   userRole?: UserRole;
   experimentalSettings?: ExperimentalSkinSettings;
   onSaveExperimentalSettings?: (settings: ExperimentalSkinSettings) => void;
+  onOpenLayoutEditMode?: () => void;
 }
 
 const TOOL_LABELS: { key: keyof KeybindSettings; label: string; desc: string }[] = [
@@ -104,6 +105,12 @@ const TOOL_SKIN_SLOTS: ToolSkinSlot[] = [
     icon: <Type className="w-4 h-4 text-emerald-500" />,
   },
   {
+    key: 'image',
+    title: 'Вставить изображение',
+    desc: 'Инструмент добавления картинок на холст',
+    icon: <ImageIcon className="w-4 h-4 text-blue-500" />,
+  },
+  {
     key: 'select',
     title: 'Курсор / Выбор',
     desc: 'Выделение и трансформация объектов',
@@ -125,6 +132,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   userRole = 'tutor',
   experimentalSettings = DEFAULT_EXPERIMENTAL_SKINS,
   onSaveExperimentalSettings,
+  onOpenLayoutEditMode,
 }) => {
   const [activeTab, setActiveTab] = useState<'keybinds' | 'skins'>('keybinds');
   const [localKeybinds, setLocalKeybinds] = useState<KeybindSettings>(keybinds);
@@ -294,7 +302,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                         : 'bg-white text-slate-700 border-slate-300 hover:border-blue-500 hover:text-blue-600 shadow-2xs'
                     }`}
                   >
-                    {isRecording ? 'Нажмите...' : currentKeyVal.toUpperCase()}
+                    {isRecording ? 'Нажмите...' : (currentKeyVal ? currentKeyVal.toUpperCase() : '')}
                   </button>
                 </div>
               );
@@ -369,6 +377,21 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </div>
 
                 <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                  {/* Interactive Layout Adjustment Launcher */}
+                  {onOpenLayoutEditMode && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onClose();
+                        onOpenLayoutEditMode();
+                      }}
+                      className="px-3 py-1.5 bg-purple-100 hover:bg-purple-200 text-purple-900 font-bold rounded-xl text-xs border border-purple-300 shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Move className="w-3.5 h-3.5 text-purple-700" />
+                      <span>Настроить положение на экране</span>
+                    </button>
+                  )}
+
                   {/* Export Full Pack JSON */}
                   <button
                     type="button"

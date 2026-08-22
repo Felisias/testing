@@ -77,6 +77,7 @@ export interface ToolSkinConfig {
   laser?: string;
   shapes?: string;
   text?: string;
+  image?: string;
   select?: string;
   pan?: string;
 }
@@ -97,6 +98,7 @@ export const DEFAULT_TOOL_TRANSFORMS: ToolLayoutConfig = {
   laser: { x: 0, y: 0, scale: 1.5, rotation: -45 },
   rect: { x: 0, y: 0, scale: 1.5, rotation: -45 },
   text: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+  image: { x: 0, y: 0, scale: 1.5, rotation: -45 },
   select: { x: 0, y: 0, scale: 1.5, rotation: -45 },
   pan: { x: 0, y: 0, scale: 1.5, rotation: -45 },
 };

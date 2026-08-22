@@ -31,18 +31,14 @@ import {
   Hand,
   Undo2,
   Redo2,
-  Trash2,
   Layers,
-  Sigma,
   Check,
   Move,
   RotateCcw,
   RotateCw,
   Upload,
   Download,
-  Sliders,
   CheckCircle2,
-  Compass,
 } from 'lucide-react';
 
 interface ExperimentalToolbarProps {
@@ -73,6 +69,8 @@ interface ExperimentalToolbarProps {
   onSaveLayouts?: (layouts: ToolLayoutConfig) => void;
   onSaveFullSettings?: (settings: ExperimentalSkinSettings) => void;
   onShowToast?: (message: string) => void;
+  isLayoutEditMode?: boolean;
+  setIsLayoutEditMode?: (mode: boolean) => void;
 }
 
 interface ToolItemDef {
@@ -134,6 +132,14 @@ const EXPERIMENTAL_TOOLS: ToolItemDef[] = [
     tipType: 'text',
   },
   {
+    id: 'image' as ToolType,
+    skinKey: 'image',
+    name: 'Вставить картинку',
+    category: 'utility',
+    icon: <ImageIcon className="w-3.5 h-3.5" />,
+    tipType: 'block',
+  },
+  {
     id: 'select',
     skinKey: 'select',
     name: 'Курсор / Выбор',
@@ -175,13 +181,18 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
   onSaveLayouts,
   onSaveFullSettings,
   onShowToast,
+  isLayoutEditMode: isLayoutEditModeProp,
+  setIsLayoutEditMode: setIsLayoutEditModeProp,
 }) => {
   const [activeToolFlyout, setActiveToolFlyout] = useState<ToolType | 'bg' | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const jsonImportRef = useRef<HTMLInputElement>(null);
 
   // Interactive Layout Customization State
-  const [isLayoutEditMode, setIsLayoutEditMode] = useState(false);
+  const [internalLayoutEditMode, setInternalLayoutEditMode] = useState(false);
+  const isLayoutEditMode = isLayoutEditModeProp !== undefined ? isLayoutEditModeProp : internalLayoutEditMode;
+  const setIsLayoutEditMode = setIsLayoutEditModeProp || setInternalLayoutEditMode;
+
   const [currentLayouts, setCurrentLayouts] = useState<ToolLayoutConfig>(() => ({
     ...DEFAULT_TOOL_TRANSFORMS,
     ...(toolLayouts || {}),
@@ -267,6 +278,14 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
 
   const handleSelectTool = (targetTool: ToolType) => {
     if (isLayoutEditMode) return; // Prevent selecting tool during layout edit mode
+
+    // If it's image tool, directly trigger file dialog
+    if (targetTool === ('image' as ToolType)) {
+      if (!canEdit) return;
+      fileInputRef.current?.click();
+      return;
+    }
+
     if (!canEdit && targetTool !== 'select' && targetTool !== 'pan') return;
 
     if (tool === targetTool || (targetTool === 'rect' && isShapeToolActive)) {
@@ -366,7 +385,6 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
       const existing = prev[toolId] || { x: 0, y: 0, scale: 1.5, rotation: -45 };
       const curRot = existing.rotation !== undefined ? existing.rotation : -45;
       let newRot = curRot + deltaDeg;
-      // Normalize angle between -180 and 180 degrees
       while (newRot > 180) newRot -= 360;
       while (newRot <= -180) newRot += 360;
       return {
@@ -520,7 +538,11 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
           <img
             src={customImage}
             alt={item.name}
-            className="w-full h-full object-contain filter drop-shadow-xl select-none pointer-events-none"
+            className={`w-full h-full object-contain select-none pointer-events-none transition-all duration-200 ${
+              isSelected
+                ? 'filter drop-shadow-[0_0_12px_rgba(168,85,247,0.95)] drop-shadow-[0_4px_8px_rgba(0,0,0,0.4)]'
+                : 'filter drop-shadow-md hover:drop-shadow-lg'
+            }`}
             style={{ transform: `rotate(${rotation}deg)` }}
           />
         </div>
@@ -541,7 +563,11 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
       <div className="relative w-full h-full flex items-center justify-center pointer-events-none select-none">
         {/* Angled Stationery Body Container rotated at dynamic angle */}
         <div
-          className="relative w-40 h-8 flex items-center transition-transform duration-150 filter drop-shadow-lg pointer-events-none select-none"
+          className={`relative w-40 h-8 flex items-center transition-all duration-150 pointer-events-none select-none ${
+            isSelected
+              ? 'filter drop-shadow-[0_0_12px_rgba(168,85,247,0.9)] drop-shadow-[0_4px_8px_rgba(0,0,0,0.5)]'
+              : 'filter drop-shadow-md hover:drop-shadow-lg'
+          }`}
           style={{ transform: `rotate(${rotation}deg)` }}
         >
           {/* Main Rectangular Hex Barrel with Purple-Black Grid Mesh Texture */}
@@ -640,19 +666,19 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
     <>
       {/* Top HUD Banner when in Interactive Layout Customization Mode */}
       {isLayoutEditMode && (
-        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[100] bg-slate-950/95 backdrop-blur-xl border-2 border-purple-500 rounded-3xl p-3 shadow-2xl flex flex-wrap items-center gap-3 animate-in slide-in-from-top-4 text-white max-w-3xl w-[96%]">
+        <div className="fixed top-3 left-1/2 -translate-x-1/2 z-[100] bg-white/95 backdrop-blur-xl border-2 border-purple-500 rounded-3xl p-3 shadow-2xl flex flex-wrap items-center gap-3 animate-in slide-in-from-top-4 text-slate-800 max-w-3xl w-[96%]">
           <div className="flex items-center gap-2">
-            <div className="p-2 bg-purple-600/30 text-purple-300 rounded-xl border border-purple-400/40 shrink-0">
+            <div className="p-2 bg-purple-100 text-purple-700 rounded-xl border border-purple-300 shrink-0">
               <Move className="w-5 h-5 animate-pulse" />
             </div>
             <div>
-              <div className="text-xs font-extrabold text-purple-200 uppercase tracking-wider flex items-center gap-2">
+              <div className="text-xs font-extrabold text-purple-900 uppercase tracking-wider flex items-center gap-2">
                 <span>Режим расстановки, масштаба и поворота</span>
-                <span className="px-2 py-0.2 bg-purple-500/40 text-purple-100 text-[10px] rounded-full">
+                <span className="px-2 py-0.2 bg-purple-100 text-purple-800 text-[10px] rounded-full border border-purple-200">
                   ПЕРЕТАСКИВАНИЕ МЫШЬЮ
                 </span>
               </div>
-              <div className="text-[11px] text-slate-300 flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
+              <div className="text-[11px] text-slate-600 flex flex-wrap gap-x-3 gap-y-0.5 mt-0.5">
                 <span>• Тащите инструмент мышью</span>
                 <span>• Размер: <b>+/-</b> или колесо</span>
                 <span>• Поворот: <b>↺/↻</b> или <b>Shift+колесо</b></span>
@@ -665,9 +691,9 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
             <button
               onClick={() => jsonImportRef.current?.click()}
               title="Загрузить готовый JSON пак (расстановка, масштаб, поворот + ваши PNG скины)"
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
             >
-              <Upload className="w-3.5 h-3.5 text-blue-400" />
+              <Upload className="w-3.5 h-3.5 text-blue-600" />
               <span>Загрузить пак</span>
             </button>
 
@@ -675,9 +701,9 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
             <button
               onClick={() => exportFullToolPackFile(currentLayouts)}
               title="Скачать единый JSON файл со всеми скинами и координатами"
-              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-600 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-purple-800 border border-purple-300 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer"
             >
-              <Download className="w-3.5 h-3.5 text-purple-400" />
+              <Download className="w-3.5 h-3.5 text-purple-600" />
               <span>Скачать пак</span>
             </button>
 
@@ -685,7 +711,7 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
             <button
               onClick={handleResetAllLayouts}
               title="Сбросить все положения, размеры и повороты к исходным"
-              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white border border-slate-600 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
+              className="p-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 hover:text-slate-900 border border-slate-300 rounded-xl text-xs font-bold transition flex items-center gap-1 cursor-pointer"
             >
               <RotateCcw className="w-3.5 h-3.5" />
             </button>
@@ -694,9 +720,9 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
             <button
               onClick={handleToggleLayoutEditMode}
               title="Зафиксировать расположение, применить размер/поворот и скачать файл пака"
-              className="px-4 py-1.5 bg-gradient-to-r from-purple-600 to-indigo-600 hover:from-purple-500 hover:to-indigo-500 text-white rounded-xl text-xs font-extrabold transition flex items-center gap-1.5 shadow-lg shadow-purple-600/40 cursor-pointer"
+              className="px-4 py-1.5 bg-purple-600 hover:bg-purple-700 text-white rounded-xl text-xs font-extrabold transition flex items-center gap-1.5 shadow-md shadow-purple-500/30 cursor-pointer"
             >
-              <CheckCircle2 className="w-4 h-4 text-emerald-300" />
+              <CheckCircle2 className="w-4 h-4 text-white" />
               <span>Зафиксировать (✓)</span>
             </button>
           </div>
@@ -710,6 +736,15 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
         accept=".json,application/json"
         className="hidden"
         onChange={handleImportJsonFile}
+      />
+
+      {/* Hidden File Input for Image Upload */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="hidden"
+        onChange={handleImageFileChange}
       />
 
       <aside
@@ -733,7 +768,7 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                 key={item.id}
                 className={`relative group flex items-center pointer-events-auto ${
                   isFlyoutOpen
-                    ? 'z-[100]'
+                    ? 'z-[500]'
                     : isLayoutEditMode
                     ? isDraggingThis
                       ? 'z-[90]'
@@ -756,19 +791,7 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                   }}
                   className="relative flex items-center justify-center"
                 >
-                  {/* Steady Atmospheric Ambient Backlight Glow behind the selected tool */}
-                  {!isLayoutEditMode && isSelected && (
-                    <div
-                      className="absolute -inset-5 -z-10 rounded-3xl pointer-events-none transition-all duration-300"
-                      style={{
-                        background:
-                          'radial-gradient(ellipse at center, rgba(168, 85, 247, 0.75) 0%, rgba(129, 140, 248, 0.5) 40%, rgba(99, 102, 241, 0.25) 65%, transparent 82%)',
-                        filter: 'blur(12px)',
-                      }}
-                    />
-                  )}
-
-                  {/* Visual Tool Item Button */}
+                  {/* Visual Tool Item Button with Transparent Background & Non-Rectangular Hitbox */}
                   <div
                     onPointerDown={(e) => handleToolPointerDown(e, item.id)}
                     onPointerMove={handleToolPointerMove}
@@ -776,14 +799,14 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                     onPointerCancel={handleToolPointerUp}
                     onWheel={(e) => handleToolWheel(e, item.id)}
                     onClick={() => handleSelectTool(item.id)}
-                    className={`relative w-36 h-15 rounded-2xl flex items-center justify-center transition-all duration-200 ease-out select-none ${
+                    className={`relative w-36 h-15 rounded-2xl flex items-center justify-center transition-all duration-200 ease-out select-none bg-transparent ${
                       isLayoutEditMode
-                        ? 'cursor-grab active:cursor-grabbing border-2 border-dashed border-purple-400 bg-purple-950/40 shadow-xl ring-2 ring-purple-500/30'
+                        ? 'cursor-grab active:cursor-grabbing border-2 border-dashed border-purple-400 bg-purple-100/40 shadow-xl ring-2 ring-purple-500/30'
                         : isDisabled
                         ? 'opacity-30 cursor-not-allowed'
                         : isSelected
-                        ? 'translate-x-7 -translate-y-3.5 scale-110 drop-shadow-2xl z-30 cursor-pointer'
-                        : 'hover:scale-115 hover:translate-x-3.5 hover:-translate-y-1 drop-shadow-lg z-10 cursor-pointer'
+                        ? 'translate-x-7 -translate-y-3.5 scale-110 z-30 cursor-pointer'
+                        : 'hover:scale-115 hover:translate-x-3.5 hover:-translate-y-1 z-10 cursor-pointer'
                     }`}
                     title={
                       isLayoutEditMode
@@ -791,13 +814,13 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                         : `${item.name} (${transform.scale}x, ${rotationDeg}°)`
                     }
                   >
-                    {/* Visual 3D / PNG representation with dynamic rotation */}
+                    {/* Visual 3D / PNG representation with drop-shadow effect on the image itself */}
                     {renderToolTexture(item, isSelected, rotationDeg)}
 
                     {/* Layout Edit Mode Overlay Controls on Tool */}
                     {isLayoutEditMode && (
                       <div
-                        className="absolute -top-9 left-1/2 -translate-x-1/2 bg-slate-950/98 text-white border-2 border-purple-400/90 rounded-2xl px-2.5 py-1 text-[11px] font-mono font-bold flex items-center gap-2 shadow-2xl whitespace-nowrap z-[120] pointer-events-auto backdrop-blur-xl ring-2 ring-purple-950"
+                        className="absolute -top-9 left-1/2 -translate-x-1/2 bg-white text-slate-800 border-2 border-purple-400 rounded-2xl px-2.5 py-1 text-[11px] font-mono font-bold flex items-center gap-2 shadow-2xl whitespace-nowrap z-[120] pointer-events-auto backdrop-blur-xl ring-2 ring-purple-200"
                         onPointerDown={(e) => {
                           e.stopPropagation();
                         }}
@@ -811,13 +834,13 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                         {/* Drag Handle Indicator */}
                         <div
                           title="Зажмите и перетаскивайте"
-                          className="flex items-center gap-1 text-purple-300 border-r border-slate-700 pr-1.5 cursor-grab"
+                          className="flex items-center gap-1 text-purple-700 border-r border-slate-200 pr-1.5 cursor-grab"
                         >
                           <Move className="w-3.5 h-3.5" />
                         </div>
 
                         {/* Scale Controls */}
-                        <div className="flex items-center gap-1 border-r border-slate-700 pr-2">
+                        <div className="flex items-center gap-1 border-r border-slate-200 pr-2">
                           <button
                             type="button"
                             onPointerDown={(e) => e.stopPropagation()}
@@ -828,11 +851,11 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                               handleAdjustScale(item.id, -0.1);
                             }}
                             title="Уменьшить размер"
-                            className="w-5 h-5 bg-slate-800 hover:bg-purple-600 active:scale-95 text-slate-200 hover:text-white rounded-md flex items-center justify-center cursor-pointer font-extrabold text-sm transition"
+                            className="w-5 h-5 bg-slate-100 hover:bg-purple-600 hover:text-white active:scale-95 text-slate-700 rounded-md flex items-center justify-center cursor-pointer font-extrabold text-sm transition"
                           >
                             -
                           </button>
-                          <span className="text-purple-200 min-w-[32px] text-center font-bold">{transform.scale}x</span>
+                          <span className="text-purple-900 min-w-[32px] text-center font-bold">{transform.scale}x</span>
                           <button
                             type="button"
                             onPointerDown={(e) => e.stopPropagation()}
@@ -843,14 +866,14 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                               handleAdjustScale(item.id, 0.1);
                             }}
                             title="Увеличить размер"
-                            className="w-5 h-5 bg-slate-800 hover:bg-purple-600 active:scale-95 text-slate-200 hover:text-white rounded-md flex items-center justify-center cursor-pointer font-extrabold text-sm transition"
+                            className="w-5 h-5 bg-slate-100 hover:bg-purple-600 hover:text-white active:scale-95 text-slate-700 rounded-md flex items-center justify-center cursor-pointer font-extrabold text-sm transition"
                           >
                             +
                           </button>
                         </div>
 
                         {/* Rotation Controls */}
-                        <div className="flex items-center gap-1 border-r border-slate-700 pr-2">
+                        <div className="flex items-center gap-1 border-r border-slate-200 pr-2">
                           <button
                             type="button"
                             onPointerDown={(e) => e.stopPropagation()}
@@ -861,11 +884,11 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                               handleAdjustRotation(item.id, -15);
                             }}
                             title="Повернуть против часовой стрелки на 15°"
-                            className="w-5 h-5 bg-slate-800 hover:bg-cyan-600 active:scale-95 text-cyan-300 hover:text-white rounded-md flex items-center justify-center cursor-pointer transition"
+                            className="w-5 h-5 bg-slate-100 hover:bg-cyan-600 hover:text-white active:scale-95 text-cyan-700 rounded-md flex items-center justify-center cursor-pointer transition"
                           >
                             <RotateCcw className="w-3 h-3" />
                           </button>
-                          <span className="text-cyan-300 min-w-[34px] text-center font-bold">{rotationDeg}°</span>
+                          <span className="text-cyan-800 min-w-[34px] text-center font-bold">{rotationDeg}°</span>
                           <button
                             type="button"
                             onPointerDown={(e) => e.stopPropagation()}
@@ -876,7 +899,7 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                               handleAdjustRotation(item.id, 15);
                             }}
                             title="Повернуть по часовой стрелке на 15°"
-                            className="w-5 h-5 bg-slate-800 hover:bg-cyan-600 active:scale-95 text-cyan-300 hover:text-white rounded-md flex items-center justify-center cursor-pointer transition"
+                            className="w-5 h-5 bg-slate-100 hover:bg-cyan-600 hover:text-white active:scale-95 text-cyan-700 rounded-md flex items-center justify-center cursor-pointer transition"
                           >
                             <RotateCw className="w-3 h-3" />
                           </button>
@@ -894,7 +917,7 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                               handleResetSingleTool(item.id);
                             }}
                             title="Сбросить положение, масштаб и поворот этого инструмента"
-                            className="w-5 h-5 bg-slate-800 hover:bg-rose-900/80 text-rose-400 hover:text-rose-200 rounded-md flex items-center justify-center cursor-pointer transition"
+                            className="w-5 h-5 bg-slate-100 hover:bg-rose-600 hover:text-white text-rose-600 rounded-md flex items-center justify-center cursor-pointer transition"
                           >
                             <RotateCcw className="w-3 h-3" />
                           </button>
@@ -904,16 +927,16 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                   </div>
                 </div>
 
-                {/* Flyout 1: Pen Color & Stroke Settings */}
+                {/* Flyout 1: Pen Color & Stroke Settings (Clean Light Theme) */}
                 {!isLayoutEditMode && item.id === 'pen' && isFlyoutOpen && canEdit && (
                   <div
-                    className="absolute left-[135px] top-0 ml-3 w-58 bg-slate-900/98 backdrop-blur-xl rounded-2xl shadow-2xl border-2 border-purple-500/70 p-3.5 z-[150] animate-in fade-in slide-in-from-left-2 text-slate-100 pointer-events-auto filter drop-shadow-2xl"
+                    className="absolute left-[135px] top-0 ml-3 w-58 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-purple-200 p-3.5 z-[500] animate-in fade-in slide-in-from-left-2 text-slate-800 pointer-events-auto filter drop-shadow-2xl"
                     onMouseLeave={() => setActiveToolFlyout(null)}
                   >
-                    <div className="text-[11px] font-bold text-purple-300 mb-2 uppercase tracking-wider flex items-center justify-between">
+                    <div className="text-[11px] font-bold text-purple-900 mb-2 uppercase tracking-wider flex items-center justify-between">
                       <span>Цвет и толщина пера</span>
                       <span
-                        className="w-3 h-3 rounded-full border border-white/50"
+                        className="w-3 h-3 rounded-full border border-slate-300 shadow-xs"
                         style={{ backgroundColor: toolSettings.pen.color }}
                       />
                     </div>
@@ -926,8 +949,8 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                           title={c.name}
                           className={`w-7 h-7 rounded-xl transition flex items-center justify-center cursor-pointer border ${
                             toolSettings.pen.color === c.value
-                              ? 'border-white scale-110 shadow-md ring-2 ring-purple-400'
-                              : 'border-transparent hover:scale-105'
+                              ? 'border-purple-600 scale-110 shadow-md ring-2 ring-purple-300'
+                              : 'border-slate-200 hover:scale-105'
                           }`}
                           style={{ backgroundColor: c.value }}
                         >
@@ -939,7 +962,7 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                     </div>
 
                     {/* Thickness Row */}
-                    <div className="text-[10px] text-slate-400 font-bold uppercase mb-1">Толщина линии</div>
+                    <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">Толщина линии</div>
                     <div className="flex items-center gap-1">
                       {STROKE_WIDTHS.map((sw) => (
                         <button
@@ -947,8 +970,8 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                           onClick={() => updateToolSetting('pen', { strokeWidth: sw.size })}
                           className={`flex-1 py-1 px-1 rounded-lg text-[10px] font-bold transition cursor-pointer border ${
                             toolSettings.pen.strokeWidth === sw.size
-                              ? 'bg-purple-600 text-white border-purple-500 shadow-md'
-                              : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                              ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
                           }`}
                         >
                           {sw.size}px
@@ -961,13 +984,13 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                 {/* Flyout 2: Highlighter Color & Size */}
                 {!isLayoutEditMode && item.id === 'highlighter' && isFlyoutOpen && canEdit && (
                   <div
-                    className="absolute left-[135px] top-0 ml-3 w-58 bg-slate-900/98 backdrop-blur-xl rounded-2xl shadow-2xl border-2 border-purple-500/70 p-3.5 z-[150] animate-in fade-in slide-in-from-left-2 text-slate-100 pointer-events-auto filter drop-shadow-2xl"
+                    className="absolute left-[135px] top-0 ml-3 w-58 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-amber-200 p-3.5 z-[500] animate-in fade-in slide-in-from-left-2 text-slate-800 pointer-events-auto filter drop-shadow-2xl"
                     onMouseLeave={() => setActiveToolFlyout(null)}
                   >
-                    <div className="text-[11px] font-bold text-amber-400 mb-2 uppercase tracking-wider flex items-center justify-between">
+                    <div className="text-[11px] font-bold text-amber-800 mb-2 uppercase tracking-wider flex items-center justify-between">
                       <span>Цвет выделителя</span>
                       <span
-                        className="w-3 h-3 rounded-full border border-white/50"
+                        className="w-3 h-3 rounded-full border border-slate-300 shadow-xs"
                         style={{ backgroundColor: toolSettings.highlighter.color }}
                       />
                     </div>
@@ -986,19 +1009,19 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                           title={c.label}
                           className={`w-7 h-7 rounded-xl transition flex items-center justify-center cursor-pointer border ${
                             toolSettings.highlighter.color === c.hex
-                              ? 'border-white scale-110 shadow-md ring-2 ring-amber-400'
-                              : 'border-transparent hover:scale-105'
+                              ? 'border-amber-600 scale-110 shadow-md ring-2 ring-amber-300'
+                              : 'border-slate-200 hover:scale-105'
                           }`}
                           style={{ backgroundColor: c.hex }}
                         >
                           {toolSettings.highlighter.color === c.hex && (
-                            <Check className="w-3.5 h-3.5 text-slate-950 filter drop-shadow-sm" />
+                            <Check className="w-3.5 h-3.5 text-slate-900 filter drop-shadow-sm" />
                           )}
                         </button>
                       ))}
                     </div>
 
-                    <div className="text-[10px] text-slate-400 font-bold uppercase mb-1">Ширина маркера</div>
+                    <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">Ширина маркера</div>
                     <div className="flex items-center gap-1">
                       {[12, 20, 28, 36].map((w) => (
                         <button
@@ -1006,8 +1029,8 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                           onClick={() => updateToolSetting('highlighter', { strokeWidth: w })}
                           className={`flex-1 py-1 px-1 rounded-lg text-[10px] font-bold transition cursor-pointer border ${
                             toolSettings.highlighter.strokeWidth === w
-                              ? 'bg-amber-500 text-slate-950 border-amber-400 shadow-md'
-                              : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                              ? 'bg-amber-500 text-slate-900 border-amber-500 shadow-xs'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
                           }`}
                         >
                           {w}px
@@ -1020,55 +1043,129 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                 {/* Flyout 3: Eraser Size */}
                 {!isLayoutEditMode && item.id === 'eraser' && isFlyoutOpen && canEdit && (
                   <div
-                    className="absolute left-[135px] top-0 ml-3 w-50 bg-slate-900/98 backdrop-blur-xl rounded-2xl shadow-2xl border-2 border-rose-500/60 p-3.5 z-[150] animate-in fade-in slide-in-from-left-2 text-slate-100 pointer-events-auto filter drop-shadow-2xl"
+                    className="absolute left-[135px] top-0 ml-3 w-50 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-rose-200 p-3.5 z-[500] animate-in fade-in slide-in-from-left-2 text-slate-800 pointer-events-auto filter drop-shadow-2xl"
                     onMouseLeave={() => setActiveToolFlyout(null)}
                   >
-                    <div className="text-[11px] font-bold text-rose-400 mb-2 uppercase tracking-wider flex items-center justify-between">
-                      <span>Размер ластика</span>
+                    <div className="text-[11px] font-bold text-rose-800 mb-2 uppercase tracking-wider">
+                      Размер ластика
                     </div>
-                    <div className="grid grid-cols-4 gap-1">
-                      {[10, 20, 36, 60].map((sz) => (
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[12, 24, 36, 48].map((size) => (
                         <button
-                          key={sz}
-                          onClick={() => updateToolSetting('eraser', { strokeWidth: sz })}
-                          className={`py-1.5 rounded-lg text-xs font-bold transition cursor-pointer border ${
-                            toolSettings.eraser.strokeWidth === sz
-                              ? 'bg-rose-600 text-white border-rose-500 shadow-md'
-                              : 'bg-slate-800 hover:bg-slate-700 text-slate-300 border-slate-700'
+                          key={size}
+                          onClick={() => updateToolSetting('eraser', { strokeWidth: size })}
+                          className={`p-2 rounded-xl text-center text-xs font-bold transition cursor-pointer border flex flex-col items-center gap-1 ${
+                            toolSettings.eraser.strokeWidth === size
+                              ? 'bg-rose-500 text-white border-rose-500 shadow-md'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
                           }`}
                         >
-                          {sz}px
+                          <div
+                            className="rounded-full bg-current"
+                            style={{ width: Math.max(6, size / 4), height: Math.max(6, size / 4) }}
+                          />
+                          <span>{size}px</span>
                         </button>
                       ))}
                     </div>
                   </div>
                 )}
 
-                {/* Flyout 4: Shapes & Geometry Menu */}
+                {/* Flyout 4: Shape Tools Selector (Ruler / Shapes Submenu) */}
                 {!isLayoutEditMode && item.id === 'rect' && isFlyoutOpen && canEdit && (
                   <div
-                    className="absolute left-[135px] top-0 ml-3 w-64 bg-slate-900/98 backdrop-blur-xl rounded-2xl shadow-2xl border-2 border-purple-500/70 p-3.5 z-[150] animate-in fade-in slide-in-from-left-2 text-slate-100 pointer-events-auto filter drop-shadow-2xl"
+                    className="absolute left-[135px] top-0 ml-3 w-64 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-purple-200 p-3.5 z-[500] animate-in fade-in slide-in-from-left-2 text-slate-800 pointer-events-auto filter drop-shadow-2xl"
                     onMouseLeave={() => setActiveToolFlyout(null)}
                   >
-                    <div className="text-[11px] font-bold text-purple-300 mb-2 uppercase tracking-wider">
-                      Фигуры и геометрия
+                    <div className="text-[11px] font-bold text-purple-900 mb-2 uppercase tracking-wider flex items-center justify-between">
+                      <span>Фигуры и черчение</span>
+                      <span
+                        className="w-3 h-3 rounded-full border border-slate-300 shadow-xs"
+                        style={{ backgroundColor: toolSettings.shapes?.color || '#a855f7' }}
+                      />
                     </div>
-                    <div className="grid grid-cols-2 gap-1.5">
+                    <div className="grid grid-cols-2 gap-1.5 mb-3">
                       {shapeTools.map((st) => (
                         <button
                           key={st.id}
                           onClick={() => {
                             setTool(st.id);
-                            setActiveToolFlyout(null);
+                            setActiveToolFlyout('rect');
                           }}
-                          className={`p-2 rounded-xl text-xs font-bold transition flex items-center gap-2 cursor-pointer border ${
+                          className={`p-2 rounded-xl text-xs font-semibold flex items-center gap-2 transition cursor-pointer border ${
                             tool === st.id
-                              ? 'bg-purple-600 text-white border-purple-400 shadow-md'
-                              : 'bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700'
+                              ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
                           }`}
                         >
-                          {st.icon}
+                          <span className="shrink-0">{st.icon}</span>
                           <span className="truncate">{st.label}</span>
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Shape Colors */}
+                    <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">Цвет контура</div>
+                    <div className="grid grid-cols-5 gap-1.5 mb-3">
+                      {QUICK_PALETTES.map((c) => (
+                        <button
+                          key={c.value}
+                          onClick={() => updateToolSetting('shapes', { color: c.value })}
+                          title={c.name}
+                          className={`w-7 h-7 rounded-xl transition flex items-center justify-center cursor-pointer border ${
+                            (toolSettings.shapes?.color || '#1E293B') === c.value
+                              ? 'border-purple-600 scale-110 shadow-md ring-2 ring-purple-300'
+                              : 'border-slate-200 hover:scale-105'
+                          }`}
+                          style={{ backgroundColor: c.value }}
+                        >
+                          {(toolSettings.shapes?.color || '#1E293B') === c.value && (
+                            <Check className="w-3.5 h-3.5 text-white filter drop-shadow-sm" />
+                          )}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="text-[10px] text-slate-500 font-bold uppercase mb-1">Толщина контура</div>
+                    <div className="flex items-center gap-1">
+                      {[1, 2, 4, 6].map((w) => (
+                        <button
+                          key={w}
+                          onClick={() => updateToolSetting('shapes', { strokeWidth: w })}
+                          className={`flex-1 py-1 px-1 rounded-lg text-[10px] font-bold transition cursor-pointer border ${
+                            (toolSettings.shapes?.strokeWidth || 2) === w
+                              ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          {w}px
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Flyout 5: Text Formatting */}
+                {!isLayoutEditMode && item.id === 'text' && isFlyoutOpen && canEdit && (
+                  <div
+                    className="absolute left-[135px] top-0 ml-3 w-56 bg-white/98 backdrop-blur-xl rounded-2xl shadow-2xl border border-purple-200 p-3.5 z-[500] animate-in fade-in slide-in-from-left-2 text-slate-800 pointer-events-auto filter drop-shadow-2xl"
+                    onMouseLeave={() => setActiveToolFlyout(null)}
+                  >
+                    <div className="text-[11px] font-bold text-purple-900 mb-2 uppercase tracking-wider">
+                      Размер шрифта текста
+                    </div>
+                    <div className="grid grid-cols-4 gap-1.5">
+                      {[16, 20, 24, 32].map((fs) => (
+                        <button
+                          key={fs}
+                          onClick={() => updateToolSetting('text', { fontSize: fs })}
+                          className={`py-1.5 px-2 rounded-xl text-xs font-bold transition cursor-pointer border ${
+                            toolSettings.text.fontSize === fs
+                              ? 'bg-purple-600 text-white border-purple-600 shadow-xs'
+                              : 'bg-slate-100 hover:bg-slate-200 text-slate-700 border-slate-200'
+                          }`}
+                        >
+                          {fs}px
                         </button>
                       ))}
                     </div>
@@ -1077,149 +1174,6 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
               </div>
             );
           })}
-        </div>
-
-        {/* Floating Compact Utility Dock (Layout Config, Math, Background, Image, Undo, Redo, Clear) */}
-        <div className="mt-2 ml-2 flex items-center gap-1.5 p-1.5 bg-slate-950/85 backdrop-blur-md rounded-2xl border border-purple-500/30 shadow-xl pointer-events-auto">
-          {/* Custom Layout Position & Scale & Rotation Edit Mode Button */}
-          <button
-            onClick={handleToggleLayoutEditMode}
-            title={
-              isLayoutEditMode
-                ? 'Зафиксировать положение, размер и поворот и скачать JSON'
-                : 'Настроить положение, размер и поворот каждого инструмента'
-            }
-            className={`w-8 h-8 rounded-xl transition flex items-center justify-center cursor-pointer border ${
-              isLayoutEditMode
-                ? 'bg-purple-600 text-white border-purple-400 animate-pulse shadow-lg shadow-purple-500/50'
-                : 'bg-slate-900 hover:bg-slate-800 text-purple-300 border-slate-800 hover:border-purple-500/60'
-            }`}
-          >
-            {isLayoutEditMode ? <Check className="w-4 h-4" /> : <Sliders className="w-4 h-4" />}
-          </button>
-
-          {/* Math Toolbar Toggle */}
-          {onToggleMath && (
-            <button
-              onClick={onToggleMath}
-              title="Формулы и символы LaTeX"
-              className={`w-8 h-8 rounded-xl transition flex items-center justify-center cursor-pointer border ${
-                isMathOpen
-                  ? 'bg-indigo-600 text-white border-indigo-400 shadow-md'
-                  : 'bg-slate-900 hover:bg-slate-800 text-indigo-400 border-slate-800'
-              }`}
-            >
-              <Sigma className="w-4 h-4" />
-            </button>
-          )}
-
-          {/* Sheet Background / Grid Settings */}
-          {canEdit && (
-            <div className="relative">
-              <button
-                onClick={() => setActiveToolFlyout(activeToolFlyout === 'bg' ? null : 'bg')}
-                title="Разметка листа (Клетка, Линейка, Доска)"
-                className={`w-8 h-8 rounded-xl transition flex items-center justify-center cursor-pointer border ${
-                  activeToolFlyout === 'bg'
-                    ? 'bg-purple-600 text-white border-purple-400'
-                    : 'bg-slate-900 hover:bg-slate-800 text-purple-300 border-slate-800'
-                }`}
-              >
-                <Layers className="w-4 h-4" />
-              </button>
-
-              {activeToolFlyout === 'bg' && (
-                <div
-                  className="absolute left-0 bottom-full mb-3 w-58 bg-slate-900/98 backdrop-blur-xl rounded-2xl shadow-2xl border-2 border-purple-500/70 p-3 z-[160] animate-in fade-in slide-in-from-bottom-2 text-slate-100 filter drop-shadow-2xl"
-                  onMouseLeave={() => setActiveToolFlyout(null)}
-                >
-                  <div className="text-[11px] font-bold text-purple-300 mb-2 uppercase tracking-wider">
-                    Разметка листа
-                  </div>
-                  <div className="flex flex-col gap-1">
-                    {backgrounds.map((bg) => (
-                      <button
-                        key={bg.id}
-                        onClick={() => {
-                          setBackground(bg.id);
-                          setActiveToolFlyout(null);
-                        }}
-                        className={`p-2 rounded-xl text-left transition flex items-center justify-between cursor-pointer border ${
-                          background === bg.id
-                            ? 'bg-purple-600/40 text-purple-200 border-purple-400'
-                            : 'bg-slate-800/60 hover:bg-slate-800 text-slate-300 border-transparent'
-                        }`}
-                      >
-                        <span className="text-xs font-bold">{bg.label}</span>
-                        <span className="text-[10px] text-slate-400">{bg.desc}</span>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          )}
-
-          {/* Insert Image Action */}
-          {canEdit && (
-            <div>
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                title="Загрузить изображение на доску"
-                className="w-8 h-8 rounded-xl bg-slate-900 hover:bg-slate-800 text-emerald-400 border border-slate-800 transition flex items-center justify-center cursor-pointer"
-              >
-                <ImageIcon className="w-4 h-4" />
-              </button>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={handleImageFileChange}
-              />
-            </div>
-          )}
-
-          {/* Undo / Redo */}
-          <button
-            onClick={onUndo}
-            disabled={!canUndo}
-            title="Отменить действие (Ctrl+Z)"
-            className={`w-7 h-8 rounded-lg flex items-center justify-center transition ${
-              canUndo
-                ? 'hover:bg-slate-800 text-slate-300 hover:text-white cursor-pointer'
-                : 'text-slate-600 opacity-40 cursor-not-allowed'
-            }`}
-          >
-            <Undo2 className="w-3.5 h-3.5" />
-          </button>
-          <button
-            onClick={onRedo}
-            disabled={!canRedo}
-            title="Повторить действие (Ctrl+Y)"
-            className={`w-7 h-8 rounded-lg flex items-center justify-center transition ${
-              canRedo
-                ? 'hover:bg-slate-800 text-slate-300 hover:text-white cursor-pointer'
-                : 'text-slate-600 opacity-40 cursor-not-allowed'
-            }`}
-          >
-            <Redo2 className="w-3.5 h-3.5" />
-          </button>
-
-          {/* Clear Page Action */}
-          {canEdit && (
-            <button
-              onClick={() => {
-                if (window.confirm('Очистить весь текущий лист?')) {
-                  onClearPage();
-                }
-              }}
-              title="Очистить весь лист"
-              className="w-8 h-8 rounded-xl bg-slate-900 hover:bg-rose-950 text-slate-400 hover:text-rose-400 border border-slate-800 hover:border-rose-800/60 transition flex items-center justify-center cursor-pointer"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-            </button>
-          )}
         </div>
       </aside>
     </>

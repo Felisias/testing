@@ -48,7 +48,7 @@ export const UserAvatar: React.FC<UserAvatarProps> = ({
         </span>
       ) : (
         <span className="text-white leading-none">
-          {name.charAt(0).toUpperCase()}
+          {name && name.length > 0 ? name.charAt(0).toUpperCase() : 'У'}
         </span>
       )}
 
