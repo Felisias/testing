@@ -98,6 +98,8 @@ interface RoomData {
       updatedAt: number;
     };
   };
+  toolSkins?: Record<string, string>;
+  toolLayouts?: Record<string, { x: number; y: number; scale: number; rotation: number }>;
   chatMessages: ChatMessage[];
 }
 
@@ -386,6 +388,18 @@ function getOrCreateRoom(roomId: string, title?: string, subject?: string): Room
       },
     ],
     ideCursors: {},
+    toolSkins: {},
+    toolLayouts: {
+      pen: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+      highlighter: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+      eraser: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+      laser: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+      rect: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+      text: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+      image: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+      select: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+      pan: { x: 0, y: 0, scale: 1.5, rotation: -45 },
+    },
     chatMessages: [
       {
         id: 'welcome-1',
@@ -1387,6 +1401,8 @@ ${code}
           isTimerRunning: room.isTimerRunning,
           pages: room.pages,
           participants: room.participants,
+          toolSkins: room.toolSkins || {},
+          toolLayouts: room.toolLayouts,
           chatMessages: room.chatMessages,
         },
         self: currentUser,
@@ -1398,6 +1414,8 @@ ${code}
         isLocked: room.isLocked,
         title: room.title,
         subject: room.subject,
+        toolSkins: room.toolSkins || {},
+        toolLayouts: room.toolLayouts,
         boardState: {
           pages: room.pages,
           background: room.background,
@@ -1529,6 +1547,8 @@ ${code}
             isTimerRunning: room.isTimerRunning,
             pages: room.pages,
             participants: room.participants,
+            toolSkins: room.toolSkins || {},
+            toolLayouts: room.toolLayouts,
             chatMessages: room.chatMessages,
           },
           self: currentUser,
@@ -1558,6 +1578,8 @@ ${code}
           isLocked: room.isLocked,
           title: room.title,
           subject: room.subject,
+          toolSkins: room.toolSkins || {},
+          toolLayouts: room.toolLayouts,
           boardState: {
             pages: room.pages,
             background: room.background,
@@ -1883,6 +1905,26 @@ ${code}
       scheduleSave();
       io.to(currentRoomId).emit('board:lock:changed', { isLocked: room.isLocked });
       io.to(currentRoomId).emit('board:lock:updated', { isLocked: room.isLocked });
+    });
+
+    // Tutor tool skins & layouts customization sync
+    socket.on('room:tools:update', (data: { toolSkins?: Record<string, string>; toolLayouts?: Record<string, { x: number; y: number; scale: number; rotation: number }> }) => {
+      if (!currentRoomId || !rooms[currentRoomId]) return;
+      const room = rooms[currentRoomId];
+      // Only tutor can update room tool skins and layouts
+      if (currentUser?.role !== 'tutor') return;
+
+      if (data.toolSkins !== undefined) {
+        room.toolSkins = data.toolSkins;
+      }
+      if (data.toolLayouts !== undefined) {
+        room.toolLayouts = data.toolLayouts;
+      }
+      scheduleSave();
+      io.to(currentRoomId).emit('room:tools:updated', {
+        toolSkins: room.toolSkins,
+        toolLayouts: room.toolLayouts,
+      });
     });
 
     // User profile/avatar live update

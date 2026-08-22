@@ -15,6 +15,11 @@ import {
 } from '../../types/extra';
 import { QUICK_PALETTES, STROKE_WIDTHS } from '../../data/mathSymbols';
 import {
+  preloadImageAlpha,
+  isPointInToolShape,
+  passEventThrough,
+} from '../../utils/alphaHitTest';
+import {
   MousePointer,
   Pencil,
   Highlighter,
@@ -157,6 +162,227 @@ const EXPERIMENTAL_TOOLS: ToolItemDef[] = [
   },
 ];
 
+interface AlphaToolSlotProps {
+  item: ToolItemDef;
+  isSelected: boolean;
+  isDisabled: boolean;
+  transform: ToolTransform;
+  rotationDeg: number;
+  isLayoutEditMode: boolean;
+  customImage?: string;
+  onSelectTool: (id: ToolType) => void;
+  onToolPointerDown: (e: React.PointerEvent, id: string) => void;
+  onToolPointerMove: (e: React.PointerEvent) => void;
+  onToolPointerUp: (e: React.PointerEvent) => void;
+  onToolWheel: (e: React.WheelEvent, id: string) => void;
+  handleAdjustScale: (id: string, delta: number) => void;
+  handleAdjustRotation: (id: string, delta: number) => void;
+  handleResetSingleTool: (id: string) => void;
+  renderToolTexture: (item: ToolItemDef, isSelected: boolean, isHovered: boolean, rotation: number) => React.ReactNode;
+}
+
+const AlphaToolSlot: React.FC<AlphaToolSlotProps> = ({
+  item,
+  isSelected,
+  isDisabled,
+  transform,
+  rotationDeg,
+  isLayoutEditMode,
+  customImage,
+  onSelectTool,
+  onToolPointerDown,
+  onToolPointerMove,
+  onToolPointerUp,
+  onToolWheel,
+  handleAdjustScale,
+  handleAdjustRotation,
+  handleResetSingleTool,
+  renderToolTexture,
+}) => {
+  const slotRef = useRef<HTMLDivElement>(null);
+  const [isHoveredSolid, setIsHoveredSolid] = useState(false);
+
+  const handlePointerMove = (e: React.PointerEvent) => {
+    if (isLayoutEditMode) {
+      onToolPointerMove(e);
+      return;
+    }
+    if (!slotRef.current) return;
+    const isSolid = isPointInToolShape(e.clientX, e.clientY, slotRef.current, customImage, rotationDeg);
+    if (isSolid !== isHoveredSolid) {
+      setIsHoveredSolid(isSolid);
+    }
+  };
+
+  const handlePointerLeave = () => {
+    if (isHoveredSolid) {
+      setIsHoveredSolid(false);
+    }
+  };
+
+  const handlePointerDown = (e: React.PointerEvent) => {
+    if (isLayoutEditMode) {
+      onToolPointerDown(e, item.id);
+      return;
+    }
+    if (!slotRef.current) return;
+    const isSolid = isPointInToolShape(e.clientX, e.clientY, slotRef.current, customImage, rotationDeg);
+    if (!isSolid) {
+      // Pass through click outside irregular PNG contour to whiteboard canvas below
+      passEventThrough(e, slotRef.current);
+      return;
+    }
+    e.stopPropagation();
+    onSelectTool(item.id);
+  };
+
+  const handleClick = (e: React.MouseEvent) => {
+    if (isLayoutEditMode) return;
+    if (!slotRef.current) return;
+    const isSolid = isPointInToolShape(e.clientX, e.clientY, slotRef.current, customImage, rotationDeg);
+    if (!isSolid) {
+      passEventThrough(e, slotRef.current);
+      return;
+    }
+    e.stopPropagation();
+    onSelectTool(item.id);
+  };
+
+  return (
+    <div
+      ref={slotRef}
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={onToolPointerUp}
+      onPointerCancel={onToolPointerUp}
+      onPointerLeave={handlePointerLeave}
+      onWheel={(e) => onToolWheel(e, item.id)}
+      onClick={handleClick}
+      className={`relative w-36 h-15 flex items-center justify-center transition-all duration-150 ease-out select-none ${
+        isLayoutEditMode
+          ? 'cursor-grab active:cursor-grabbing border-2 border-dashed border-purple-400 bg-purple-100/40 rounded-2xl shadow-xl ring-2 ring-purple-500/30'
+          : isDisabled
+          ? 'opacity-30 cursor-not-allowed bg-transparent'
+          : isSelected
+          ? 'translate-x-7 -translate-y-3.5 scale-110 z-30 bg-transparent'
+          : isHoveredSolid
+          ? 'scale-115 translate-x-3.5 -translate-y-1 z-20 bg-transparent cursor-pointer'
+          : 'bg-transparent z-10 cursor-default'
+      }`}
+      title={
+        isLayoutEditMode
+          ? `${item.name}: Тащите мышью. Колесико — размер (${transform.scale}x). Shift+Колесико — поворот (${rotationDeg}°)`
+          : `${item.name} (${transform.scale}x, ${rotationDeg}°)`
+      }
+    >
+      {/* Visual 3D / PNG representation with drop-shadow conforming to actual image contour */}
+      {renderToolTexture(item, isSelected, isHoveredSolid, rotationDeg)}
+
+      {/* Layout Edit Mode Overlay Controls on Tool */}
+      {isLayoutEditMode && (
+        <div
+          className="absolute -top-9 left-1/2 -translate-x-1/2 bg-white text-slate-800 border-2 border-purple-400 rounded-2xl px-2.5 py-1 text-[11px] font-mono font-bold flex items-center gap-2 shadow-2xl whitespace-nowrap z-[120] pointer-events-auto backdrop-blur-xl ring-2 ring-purple-200"
+          onPointerDown={(e) => e.stopPropagation()}
+          onPointerUp={(e) => e.stopPropagation()}
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Drag Handle Indicator */}
+          <div
+            title="Зажмите и перетаскивайте"
+            className="flex items-center gap-1 text-purple-700 border-r border-slate-200 pr-1.5 cursor-grab"
+          >
+            <Move className="w-3.5 h-3.5" />
+          </div>
+
+          {/* Scale Controls */}
+          <div className="flex items-center gap-1 border-r border-slate-200 pr-2">
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleAdjustScale(item.id, -0.1);
+              }}
+              title="Уменьшить размер"
+              className="w-5 h-5 bg-slate-100 hover:bg-purple-600 hover:text-white active:scale-95 text-slate-700 rounded-md flex items-center justify-center cursor-pointer font-extrabold text-sm transition"
+            >
+              -
+            </button>
+            <span className="text-purple-900 min-w-[32px] text-center font-bold">{transform.scale}x</span>
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleAdjustScale(item.id, 0.1);
+              }}
+              title="Увеличить размер"
+              className="w-5 h-5 bg-slate-100 hover:bg-purple-600 hover:text-white active:scale-95 text-slate-700 rounded-md flex items-center justify-center cursor-pointer font-extrabold text-sm transition"
+            >
+              +
+            </button>
+          </div>
+
+          {/* Rotation Controls */}
+          <div className="flex items-center gap-1 border-r border-slate-200 pr-2">
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleAdjustRotation(item.id, -15);
+              }}
+              title="Повернуть против часовой стрелки на 15°"
+              className="w-5 h-5 bg-slate-100 hover:bg-cyan-600 hover:text-white active:scale-95 text-cyan-700 rounded-md flex items-center justify-center cursor-pointer transition"
+            >
+              <RotateCcw className="w-3 h-3" />
+            </button>
+            <span className="text-cyan-800 min-w-[34px] text-center font-bold">{rotationDeg}°</span>
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleAdjustRotation(item.id, 15);
+              }}
+              title="Повернуть по часовой стрелке на 15°"
+              className="w-5 h-5 bg-slate-100 hover:bg-cyan-600 hover:text-white active:scale-95 text-cyan-700 rounded-md flex items-center justify-center cursor-pointer transition"
+            >
+              <RotateCw className="w-3 h-3" />
+            </button>
+          </div>
+
+          {/* Reset individual tool */}
+          {(transform.x !== 0 || transform.y !== 0 || transform.scale !== 1.5 || rotationDeg !== -45) && (
+            <button
+              type="button"
+              onPointerDown={(e) => e.stopPropagation()}
+              onPointerUp={(e) => e.stopPropagation()}
+              onClick={(e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                handleResetSingleTool(item.id);
+              }}
+              title="Сбросить положение, масштаб и поворот этого инструмента"
+              className="w-5 h-5 bg-slate-100 hover:bg-rose-600 hover:text-white text-rose-600 rounded-md flex items-center justify-center cursor-pointer transition"
+            >
+              <RotateCcw className="w-3 h-3" />
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
   tool,
   setTool,
@@ -165,6 +391,7 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
   background,
   setBackground,
   canEdit,
+  userRole = 'student',
   userName,
   userColor,
   onClearPage,
@@ -188,10 +415,19 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const jsonImportRef = useRef<HTMLInputElement>(null);
 
-  // Interactive Layout Customization State
+  // Interactive Layout Customization State (Tutor only)
+  const isTutor = userRole === 'tutor';
   const [internalLayoutEditMode, setInternalLayoutEditMode] = useState(false);
-  const isLayoutEditMode = isLayoutEditModeProp !== undefined ? isLayoutEditModeProp : internalLayoutEditMode;
-  const setIsLayoutEditMode = setIsLayoutEditModeProp || setInternalLayoutEditMode;
+  const isLayoutEditModeRaw = isLayoutEditModeProp !== undefined ? isLayoutEditModeProp : internalLayoutEditMode;
+  const isLayoutEditMode = isTutor && isLayoutEditModeRaw;
+  const setIsLayoutEditMode = (mode: boolean) => {
+    if (!isTutor) return;
+    if (setIsLayoutEditModeProp) {
+      setIsLayoutEditModeProp(mode);
+    } else {
+      setInternalLayoutEditMode(mode);
+    }
+  };
 
   const [currentLayouts, setCurrentLayouts] = useState<ToolLayoutConfig>(() => ({
     ...DEFAULT_TOOL_TRANSFORMS,
@@ -200,16 +436,26 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
   const [activeDraggingTool, setActiveDraggingTool] = useState<string | null>(null);
   const dragStartRef = useRef<{ toolId: string; startX: number; startY: number; origX: number; origY: number } | null>(null);
 
-  // Keep currentLayouts in sync if prop changes from outside
+  // Keep currentLayouts in sync if prop changes from outside (e.g. from tutor broadcast)
   useEffect(() => {
     if (toolLayouts) {
-      setCurrentLayouts((prev) => ({
+      setCurrentLayouts({
         ...DEFAULT_TOOL_TRANSFORMS,
-        ...prev,
         ...toolLayouts,
-      }));
+      });
     }
   }, [toolLayouts]);
+
+  // Preload all custom PNG skins into alpha cache for instant pixel-perfect hit testing
+  useEffect(() => {
+    if (toolSkins) {
+      Object.values(toolSkins).forEach((src) => {
+        if (typeof src === 'string' && src) {
+          preloadImageAlpha(src);
+        }
+      });
+    }
+  }, [toolSkins]);
 
   const shapeTools: { id: ToolType; label: string; icon: React.ReactNode }[] = [
     { id: 'line', label: 'Прямая линия', icon: <Minus className="w-4 h-4" /> },
@@ -529,7 +775,12 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
   };
 
   // Helper to render procedural 3D stationery tool with purple-black grid texture or custom image
-  const renderToolTexture = (item: ToolItemDef, isSelected: boolean, rotation: number) => {
+  const renderToolTexture = (
+    item: ToolItemDef,
+    isSelected: boolean,
+    isHovered: boolean,
+    rotation: number
+  ) => {
     const customImage = toolSkins[item.skinKey];
 
     if (customImage) {
@@ -541,7 +792,9 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
             className={`w-full h-full object-contain select-none pointer-events-none transition-all duration-200 ${
               isSelected
                 ? 'filter drop-shadow-[0_0_12px_rgba(168,85,247,0.95)] drop-shadow-[0_4px_8px_rgba(0,0,0,0.4)]'
-                : 'filter drop-shadow-md hover:drop-shadow-lg'
+                : isHovered
+                ? 'filter drop-shadow-[0_0_9px_rgba(168,85,247,0.75)] drop-shadow-[0_2px_6px_rgba(0,0,0,0.3)]'
+                : 'filter drop-shadow-md'
             }`}
             style={{ transform: `rotate(${rotation}deg)` }}
           />
@@ -566,7 +819,9 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
           className={`relative w-40 h-8 flex items-center transition-all duration-150 pointer-events-none select-none ${
             isSelected
               ? 'filter drop-shadow-[0_0_12px_rgba(168,85,247,0.9)] drop-shadow-[0_4px_8px_rgba(0,0,0,0.5)]'
-              : 'filter drop-shadow-md hover:drop-shadow-lg'
+              : isHovered
+              ? 'filter drop-shadow-[0_0_8px_rgba(168,85,247,0.7)] drop-shadow-[0_2px_6px_rgba(0,0,0,0.35)]'
+              : 'filter drop-shadow-md'
           }`}
           style={{ transform: `rotate(${rotation}deg)` }}
         >
@@ -791,140 +1046,24 @@ export const ExperimentalToolbar: React.FC<ExperimentalToolbarProps> = ({
                   }}
                   className="relative flex items-center justify-center"
                 >
-                  {/* Visual Tool Item Button with Transparent Background & Non-Rectangular Hitbox */}
-                  <div
-                    onPointerDown={(e) => handleToolPointerDown(e, item.id)}
-                    onPointerMove={handleToolPointerMove}
-                    onPointerUp={handleToolPointerUp}
-                    onPointerCancel={handleToolPointerUp}
-                    onWheel={(e) => handleToolWheel(e, item.id)}
-                    onClick={() => handleSelectTool(item.id)}
-                    className={`relative w-36 h-15 rounded-2xl flex items-center justify-center transition-all duration-200 ease-out select-none bg-transparent ${
-                      isLayoutEditMode
-                        ? 'cursor-grab active:cursor-grabbing border-2 border-dashed border-purple-400 bg-purple-100/40 shadow-xl ring-2 ring-purple-500/30'
-                        : isDisabled
-                        ? 'opacity-30 cursor-not-allowed'
-                        : isSelected
-                        ? 'translate-x-7 -translate-y-3.5 scale-110 z-30 cursor-pointer'
-                        : 'hover:scale-115 hover:translate-x-3.5 hover:-translate-y-1 z-10 cursor-pointer'
-                    }`}
-                    title={
-                      isLayoutEditMode
-                        ? `${item.name}: Тащите мышью. Колесико — размер (${transform.scale}x). Shift+Колесико — поворот (${rotationDeg}°)`
-                        : `${item.name} (${transform.scale}x, ${rotationDeg}°)`
-                    }
-                  >
-                    {/* Visual 3D / PNG representation with drop-shadow effect on the image itself */}
-                    {renderToolTexture(item, isSelected, rotationDeg)}
-
-                    {/* Layout Edit Mode Overlay Controls on Tool */}
-                    {isLayoutEditMode && (
-                      <div
-                        className="absolute -top-9 left-1/2 -translate-x-1/2 bg-white text-slate-800 border-2 border-purple-400 rounded-2xl px-2.5 py-1 text-[11px] font-mono font-bold flex items-center gap-2 shadow-2xl whitespace-nowrap z-[120] pointer-events-auto backdrop-blur-xl ring-2 ring-purple-200"
-                        onPointerDown={(e) => {
-                          e.stopPropagation();
-                        }}
-                        onPointerUp={(e) => {
-                          e.stopPropagation();
-                        }}
-                        onClick={(e) => {
-                          e.stopPropagation();
-                        }}
-                      >
-                        {/* Drag Handle Indicator */}
-                        <div
-                          title="Зажмите и перетаскивайте"
-                          className="flex items-center gap-1 text-purple-700 border-r border-slate-200 pr-1.5 cursor-grab"
-                        >
-                          <Move className="w-3.5 h-3.5" />
-                        </div>
-
-                        {/* Scale Controls */}
-                        <div className="flex items-center gap-1 border-r border-slate-200 pr-2">
-                          <button
-                            type="button"
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onPointerUp={(e) => e.stopPropagation()}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleAdjustScale(item.id, -0.1);
-                            }}
-                            title="Уменьшить размер"
-                            className="w-5 h-5 bg-slate-100 hover:bg-purple-600 hover:text-white active:scale-95 text-slate-700 rounded-md flex items-center justify-center cursor-pointer font-extrabold text-sm transition"
-                          >
-                            -
-                          </button>
-                          <span className="text-purple-900 min-w-[32px] text-center font-bold">{transform.scale}x</span>
-                          <button
-                            type="button"
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onPointerUp={(e) => e.stopPropagation()}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleAdjustScale(item.id, 0.1);
-                            }}
-                            title="Увеличить размер"
-                            className="w-5 h-5 bg-slate-100 hover:bg-purple-600 hover:text-white active:scale-95 text-slate-700 rounded-md flex items-center justify-center cursor-pointer font-extrabold text-sm transition"
-                          >
-                            +
-                          </button>
-                        </div>
-
-                        {/* Rotation Controls */}
-                        <div className="flex items-center gap-1 border-r border-slate-200 pr-2">
-                          <button
-                            type="button"
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onPointerUp={(e) => e.stopPropagation()}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleAdjustRotation(item.id, -15);
-                            }}
-                            title="Повернуть против часовой стрелки на 15°"
-                            className="w-5 h-5 bg-slate-100 hover:bg-cyan-600 hover:text-white active:scale-95 text-cyan-700 rounded-md flex items-center justify-center cursor-pointer transition"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                          </button>
-                          <span className="text-cyan-800 min-w-[34px] text-center font-bold">{rotationDeg}°</span>
-                          <button
-                            type="button"
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onPointerUp={(e) => e.stopPropagation()}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleAdjustRotation(item.id, 15);
-                            }}
-                            title="Повернуть по часовой стрелке на 15°"
-                            className="w-5 h-5 bg-slate-100 hover:bg-cyan-600 hover:text-white active:scale-95 text-cyan-700 rounded-md flex items-center justify-center cursor-pointer transition"
-                          >
-                            <RotateCw className="w-3 h-3" />
-                          </button>
-                        </div>
-
-                        {/* Reset individual tool */}
-                        {(transform.x !== 0 || transform.y !== 0 || transform.scale !== 1.5 || rotationDeg !== -45) && (
-                          <button
-                            type="button"
-                            onPointerDown={(e) => e.stopPropagation()}
-                            onPointerUp={(e) => e.stopPropagation()}
-                            onClick={(e) => {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              handleResetSingleTool(item.id);
-                            }}
-                            title="Сбросить положение, масштаб и поворот этого инструмента"
-                            className="w-5 h-5 bg-slate-100 hover:bg-rose-600 hover:text-white text-rose-600 rounded-md flex items-center justify-center cursor-pointer transition"
-                          >
-                            <RotateCcw className="w-3 h-3" />
-                          </button>
-                        )}
-                      </div>
-                    )}
-                  </div>
+                  <AlphaToolSlot
+                    item={item}
+                    isSelected={isSelected}
+                    isDisabled={isDisabled}
+                    transform={transform}
+                    rotationDeg={rotationDeg}
+                    isLayoutEditMode={isLayoutEditMode}
+                    customImage={toolSkins[item.skinKey]}
+                    onSelectTool={handleSelectTool}
+                    onToolPointerDown={handleToolPointerDown}
+                    onToolPointerMove={handleToolPointerMove}
+                    onToolPointerUp={handleToolPointerUp}
+                    onToolWheel={handleToolWheel}
+                    handleAdjustScale={handleAdjustScale}
+                    handleAdjustRotation={handleAdjustRotation}
+                    handleResetSingleTool={handleResetSingleTool}
+                    renderToolTexture={renderToolTexture}
+                  />
                 </div>
 
                 {/* Flyout 1: Pen Color & Stroke Settings (Clean Light Theme) */}

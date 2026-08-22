@@ -110,7 +110,7 @@ export interface ExperimentalSkinSettings {
 }
 
 export const DEFAULT_EXPERIMENTAL_SKINS: ExperimentalSkinSettings = {
-  enabled: false,
+  enabled: true,
   toolSkins: {},
   toolLayouts: DEFAULT_TOOL_TRANSFORMS,
 };

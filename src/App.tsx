@@ -60,7 +60,7 @@ export default function App() {
   const [isReconnecting, setIsReconnecting] = useState(false);
   const [isOffline, setIsOffline] = useState(typeof navigator !== 'undefined' ? !navigator.onLine : false);
 
-  // Experimental 3D Tool Skins Settings
+  // Experimental 3D Tool Skins Settings (Enabled by default)
   const [experimentalSettings, setExperimentalSettings] = useState<ExperimentalSkinSettings>(() => {
     try {
       const saved = localStorage.getItem(EXPERIMENTAL_SKINS_STORAGE_KEY);
@@ -69,6 +69,7 @@ export default function App() {
         return {
           ...DEFAULT_EXPERIMENTAL_SKINS,
           ...parsed,
+          enabled: parsed.enabled !== undefined ? parsed.enabled : true,
           toolLayouts: {
             ...DEFAULT_TOOL_TRANSFORMS,
             ...(parsed.toolLayouts || {}),
@@ -76,7 +77,10 @@ export default function App() {
         };
       }
     } catch {}
-    return DEFAULT_EXPERIMENTAL_SKINS;
+    return {
+      ...DEFAULT_EXPERIMENTAL_SKINS,
+      enabled: true,
+    };
   });
 
   // Mode View (Whiteboard vs Collaborative IDE)
@@ -407,6 +411,7 @@ export default function App() {
     socket.off('board:background:updated');
     socket.off('board:lock:changed');
     socket.off('board:lock:updated');
+    socket.off('room:tools:updated');
     socket.off('cursor:moved');
     socket.off('cursor:removed');
     socket.off('laser:pointer');
@@ -445,6 +450,25 @@ export default function App() {
       if (typeof r.activePageIndex === 'number') setActivePageIndex(r.activePageIndex);
       if (r.pages) setPages(r.pages);
 
+      // Synchronize tool skins and layout transforms from tutor
+      if (r.toolSkins !== undefined || r.toolLayouts !== undefined) {
+        setExperimentalSettings((prev) => {
+          const nextSkins = r.toolSkins !== undefined ? r.toolSkins : prev.toolSkins;
+          const nextLayouts = r.toolLayouts !== undefined
+            ? { ...DEFAULT_TOOL_TRANSFORMS, ...r.toolLayouts }
+            : prev.toolLayouts;
+          const updated: ExperimentalSkinSettings = {
+            ...prev,
+            toolSkins: nextSkins,
+            toolLayouts: nextLayouts,
+          };
+          try {
+            localStorage.setItem(EXPERIMENTAL_SKINS_STORAGE_KEY, JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
+      }
+
       if (r.participants) {
         setParticipants(r.participants);
         const activeIds = new Set(Object.keys(r.participants));
@@ -475,6 +499,25 @@ export default function App() {
         if (data.boardState.background) setBackground(data.boardState.background);
         if (typeof data.boardState.totalPages === 'number') setTotalPages(data.boardState.totalPages);
         if (typeof data.boardState.activePageIndex === 'number') setActivePageIndex(data.boardState.activePageIndex);
+      }
+
+      // Synchronize tool skins and layout transforms from tutor
+      if (data.toolSkins !== undefined || data.toolLayouts !== undefined) {
+        setExperimentalSettings((prev) => {
+          const nextSkins = data.toolSkins !== undefined ? data.toolSkins : prev.toolSkins;
+          const nextLayouts = data.toolLayouts !== undefined
+            ? { ...DEFAULT_TOOL_TRANSFORMS, ...data.toolLayouts }
+            : prev.toolLayouts;
+          const updated: ExperimentalSkinSettings = {
+            ...prev,
+            toolSkins: nextSkins,
+            toolLayouts: nextLayouts,
+          };
+          try {
+            localStorage.setItem(EXPERIMENTAL_SKINS_STORAGE_KEY, JSON.stringify(updated));
+          } catch {}
+          return updated;
+        });
       }
       if (Array.isArray(data.chatMessages)) {
         setChatMessages(data.chatMessages);
@@ -666,6 +709,28 @@ export default function App() {
 
     socket.on('board:lock:updated', handleLockUpdate);
     socket.on('board:lock:changed', handleLockUpdate);
+
+    // Tutor tool skins & layouts real-time synchronization
+    socket.on('room:tools:updated', (data: { toolSkins?: Record<string, string>; toolLayouts?: Record<string, { x: number; y: number; scale: number; rotation: number }> }) => {
+      setExperimentalSettings((prev) => {
+        const nextSkins = data.toolSkins !== undefined ? data.toolSkins : prev.toolSkins;
+        const nextLayouts = data.toolLayouts !== undefined
+          ? { ...DEFAULT_TOOL_TRANSFORMS, ...data.toolLayouts }
+          : prev.toolLayouts;
+        const updated: ExperimentalSkinSettings = {
+          ...prev,
+          toolSkins: nextSkins,
+          toolLayouts: nextLayouts,
+        };
+        try {
+          localStorage.setItem(EXPERIMENTAL_SKINS_STORAGE_KEY, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+      if (userRole !== 'tutor') {
+        showToast('🎨 Преподаватель обновил оформление и расположение инструментов');
+      }
+    });
 
     // Ephemeral multiplayer sockets
     socket.on('cursor:moved', (data: any) => {
@@ -1023,6 +1088,16 @@ export default function App() {
     } catch (e) {
       console.error('Failed to save experimental tool skins to localStorage:', e);
     }
+
+    if (userRole === 'tutor') {
+      const socket = getSocket();
+      if (socket.connected) {
+        socket.emit('room:tools:update', {
+          toolSkins: newSettings.toolSkins,
+          toolLayouts: newSettings.toolLayouts || DEFAULT_TOOL_TRANSFORMS,
+        });
+      }
+    }
     showToast(newSettings.enabled ? '✨ 3D панель инструментов активирована!' : 'Стандартная панель инструментов включена');
   };
 
@@ -1039,6 +1114,16 @@ export default function App() {
       }
       return updated;
     });
+
+    if (userRole === 'tutor') {
+      const socket = getSocket();
+      if (socket.connected) {
+        socket.emit('room:tools:update', {
+          toolLayouts: newLayouts,
+          toolSkins: experimentalSettings.toolSkins,
+        });
+      }
+    }
   };
 
   const handleSaveProfile = ({

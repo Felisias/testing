@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import {
   KeybindSettings,
   DEFAULT_KEYBINDS,
@@ -32,6 +32,9 @@ import {
   Download,
   Sliders,
   Move,
+  GraduationCap,
+  Crown,
+  Lock,
 } from 'lucide-react';
 
 interface SettingsModalProps {
@@ -143,9 +146,22 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
 
   const fileInputRefs = useRef<Record<string, HTMLInputElement | null>>({});
 
-  if (!isOpen) return null;
-
   const isTutor = userRole === 'tutor';
+
+  // Synchronize local settings when props update (e.g. tutor changes skins live)
+  useEffect(() => {
+    if (experimentalSettings) {
+      setLocalExpSettings(experimentalSettings);
+    }
+  }, [experimentalSettings]);
+
+  useEffect(() => {
+    if (keybinds) {
+      setLocalKeybinds(keybinds);
+    }
+  }, [keybinds]);
+
+  if (!isOpen) return null;
 
   const handleKeyDown = (e: React.KeyboardEvent, field: keyof KeybindSettings) => {
     e.preventDefault();
@@ -165,6 +181,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleFileUpload = (toolKey: keyof ToolSkinConfig, file: File) => {
+    if (!isTutor) return; // Restricted to tutor
     const reader = new FileReader();
     reader.onload = (event) => {
       const dataUrl = event.target?.result as string;
@@ -180,6 +197,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
   };
 
   const handleRemoveCustomSkin = (toolKey: keyof ToolSkinConfig) => {
+    if (!isTutor) return; // Restricted to tutor
     setLocalExpSettings((prev) => {
       const nextSkins = { ...prev.toolSkins };
       delete nextSkins[toolKey];
@@ -194,7 +212,17 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
     if (activeTab === 'keybinds') {
       setLocalKeybinds(DEFAULT_KEYBINDS);
     } else {
-      setLocalExpSettings(DEFAULT_EXPERIMENTAL_SKINS);
+      if (isTutor) {
+        setLocalExpSettings({
+          ...DEFAULT_EXPERIMENTAL_SKINS,
+          enabled: true,
+        });
+      } else {
+        setLocalExpSettings((prev) => ({
+          ...prev,
+          enabled: true,
+        }));
+      }
     }
   };
 
@@ -310,41 +338,66 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
           </div>
         )}
 
-        {/* Tab 2: Experimental 3D Realistic Tools Mode (Teacher Superpower) */}
+        {/* Tab 2: Experimental 3D Realistic Tools Mode */}
         {activeTab === 'skins' && (
           <div className="flex-1 overflow-y-auto space-y-3.5 pr-1 text-slate-800">
-            {/* Tutor Privilege Banner */}
-            <div className="p-3.5 bg-gradient-to-r from-purple-900 to-indigo-950 text-white rounded-2xl shadow-md border border-purple-500/30 flex items-start gap-3">
-              <div className="p-2 bg-purple-500/20 rounded-xl text-purple-300 shrink-0">
-                <ShieldCheck className="w-5 h-5 text-purple-400" />
-              </div>
-              <div className="min-w-0">
-                <div className="flex items-center gap-2">
-                  <span className="font-bold text-sm text-purple-100">Режим преподавателя</span>
-                  <span className="px-2 py-0.2 bg-purple-500/30 border border-purple-400/40 text-purple-200 text-[10px] font-bold rounded-full uppercase">
-                    Эксклюзив
-                  </span>
+            {/* Tutor vs Student Banner */}
+            {isTutor ? (
+              <div className="p-3.5 bg-gradient-to-r from-purple-900 to-indigo-950 text-white rounded-2xl shadow-md border border-purple-500/30 flex items-start gap-3">
+                <div className="p-2 bg-purple-500/20 rounded-xl text-purple-300 shrink-0">
+                  <Crown className="w-5 h-5 text-amber-400" />
                 </div>
-                <p className="text-xs text-purple-200/90 mt-0.5 leading-relaxed">
-                  Экспериментальная панель отображает реальные канцелярские инструменты под углом 45° с плавной анимацией наведения и выезжанием выбранного инструмента вперёд.
-                </p>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-purple-100">Управление инструментами (Преподаватель)</span>
+                    <span className="px-2 py-0.2 bg-amber-500/30 border border-amber-400/40 text-amber-200 text-[10px] font-bold rounded-full uppercase">
+                      Синхронизация
+                    </span>
+                  </div>
+                  <p className="text-xs text-purple-200/90 mt-0.5 leading-relaxed">
+                    Вы настраиваете скины, размер, угол и положение инструментов. Все изменения мгновенно отображаются у всех учеников в комнате.
+                  </p>
+                </div>
               </div>
-            </div>
+            ) : (
+              <div className="p-3.5 bg-gradient-to-r from-blue-900 to-slate-900 text-white rounded-2xl shadow-md border border-blue-500/30 flex items-start gap-3">
+                <div className="p-2 bg-blue-500/20 rounded-xl text-blue-300 shrink-0">
+                  <GraduationCap className="w-5 h-5 text-blue-400" />
+                </div>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <span className="font-bold text-sm text-blue-100">Оформление от преподавателя</span>
+                    <span className="px-2 py-0.2 bg-blue-500/30 border border-blue-400/40 text-blue-200 text-[10px] font-bold rounded-full uppercase">
+                      Автосинхронизация
+                    </span>
+                  </div>
+                  <p className="text-xs text-blue-200/90 mt-0.5 leading-relaxed">
+                    Картинки, размеры и расположение инструментов задаются преподавателем и обновляются в реальном времени. Вы можете включить 3D стиль от преподавателя (по умолчанию) или переключить на классическую панель.
+                  </p>
+                </div>
+              </div>
+            )}
 
-            {/* Master Toggle & Layout JSON Controls */}
+            {/* Master Toggle */}
             <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl flex flex-col gap-3">
               <div className="flex items-center justify-between gap-4">
                 <div>
                   <div className="font-bold text-xs text-slate-900 flex items-center gap-2">
-                    <span>Включить 3D отображение инструментов</span>
-                    {localExpSettings.enabled && (
+                    <span>Использовать 3D отображение инструментов</span>
+                    {localExpSettings.enabled ? (
                       <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-extrabold rounded-full text-[10px]">
-                        АКТИВНО
+                        ПО УМОЛЧАНИЮ (АКТИВНО)
+                      </span>
+                    ) : (
+                      <span className="px-2 py-0.5 bg-slate-200 text-slate-700 font-bold rounded-full text-[10px]">
+                        КЛАССИЧЕСКАЯ ПАНЕЛЬ
                       </span>
                     )}
                   </div>
                   <div className="text-[11px] text-slate-500 mt-0.5">
-                    Заменяет стандартные кнопки на реалистичные диагональные инструменты с текстурой или вашими PNG
+                    {isTutor
+                      ? 'Отображает реальные диагональные инструменты с текстурой или вашими PNG'
+                      : 'Включает реалистичные 3D инструменты, настроенные преподавателем, либо возвращает к классической панели'}
                   </div>
                 </div>
 
@@ -364,107 +417,109 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                 </label>
               </div>
 
-              {/* Master Pack Export / Import Quick Card */}
-              <div className="pt-3 border-t border-slate-200/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-purple-50/70 p-3 rounded-xl border border-purple-200/70">
-                <div className="min-w-0">
-                  <div className="text-xs font-extrabold text-purple-950 flex items-center gap-1.5">
-                    <Sliders className="w-3.5 h-3.5 text-purple-600 shrink-0" />
-                    <span>Полный пак (Расположение + Размеры + Углы + PNG-скины)</span>
+              {/* Tutor-Only Master Pack Export / Import & Layout Launcher */}
+              {isTutor && (
+                <div className="pt-3 border-t border-slate-200/90 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 bg-purple-50/70 p-3 rounded-xl border border-purple-200/70">
+                  <div className="min-w-0">
+                    <div className="text-xs font-extrabold text-purple-950 flex items-center gap-1.5">
+                      <Sliders className="w-3.5 h-3.5 text-purple-600 shrink-0" />
+                      <span>Полный пак (Расположение + Размеры + Углы + PNG-скины)</span>
+                    </div>
+                    <div className="text-[11px] text-purple-800/80 mt-0.5">
+                      Единый файл содержит и все оригинальные картинки, и точные координаты/масштаб/поворот.
+                    </div>
                   </div>
-                  <div className="text-[11px] text-purple-800/80 mt-0.5">
-                    Единый файл содержит и все оригинальные картинки, и точные координаты/масштаб/поворот.
-                  </div>
-                </div>
 
-                <div className="flex items-center gap-2 shrink-0 flex-wrap">
-                  {/* Interactive Layout Adjustment Launcher */}
-                  {onOpenLayoutEditMode && (
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    {/* Interactive Layout Adjustment Launcher */}
+                    {onOpenLayoutEditMode && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onClose();
+                          onOpenLayoutEditMode();
+                        }}
+                        className="px-3 py-1.5 bg-purple-100 hover:bg-purple-200 text-purple-900 font-bold rounded-xl text-xs border border-purple-300 shadow-xs transition flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Move className="w-3.5 h-3.5 text-purple-700" />
+                        <span>Настроить положение на экране</span>
+                      </button>
+                    )}
+
+                    {/* Export Full Pack JSON */}
                     <button
                       type="button"
                       onClick={() => {
-                        onClose();
-                        onOpenLayoutEditMode();
-                      }}
-                      className="px-3 py-1.5 bg-purple-100 hover:bg-purple-200 text-purple-900 font-bold rounded-xl text-xs border border-purple-300 shadow-xs transition flex items-center gap-1.5 cursor-pointer"
-                    >
-                      <Move className="w-3.5 h-3.5 text-purple-700" />
-                      <span>Настроить положение на экране</span>
-                    </button>
-                  )}
-
-                  {/* Export Full Pack JSON */}
-                  <button
-                    type="button"
-                    onClick={() => {
-                      const data = {
-                        appName: 'TutorBoard',
-                        format: 'tutorboard-3d-toolpack',
-                        version: '1.0',
-                        exportedAt: new Date().toISOString(),
-                        enabled: true,
-                        toolLayouts: localExpSettings.toolLayouts || DEFAULT_TOOL_TRANSFORMS,
-                        toolSkins: localExpSettings.toolSkins || {},
-                      };
-                      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-                      const url = URL.createObjectURL(blob);
-                      const a = document.createElement('a');
-                      a.href = url;
-                      a.download = `tutorboard-3d-toolpack-${new Date().toISOString().slice(0, 10)}.json`;
-                      document.body.appendChild(a);
-                      a.click();
-                      document.body.removeChild(a);
-                      URL.revokeObjectURL(url);
-                    }}
-                    className="px-3 py-1.5 bg-white hover:bg-slate-50 text-purple-900 font-bold rounded-xl text-xs border border-purple-300 shadow-xs transition flex items-center gap-1.5 cursor-pointer hover:border-purple-400"
-                  >
-                    <Download className="w-3.5 h-3.5 text-purple-600" />
-                    <span>Скачать полный пак</span>
-                  </button>
-
-                  {/* Import Full Pack JSON */}
-                  <label className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs transition flex items-center gap-1.5 shadow-sm shadow-purple-600/30 cursor-pointer">
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>Загрузить пак</span>
-                    <input
-                      type="file"
-                      accept=".json,application/json"
-                      className="hidden"
-                      onChange={(e) => {
-                        const file = e.target.files?.[0];
-                        if (!file) return;
-                        const reader = new FileReader();
-                        reader.onload = (event) => {
-                          try {
-                            const parsed = JSON.parse(event.target?.result as string);
-                            if (parsed && typeof parsed === 'object') {
-                              const layouts = parsed.toolLayouts || (parsed.pen?.scale !== undefined ? parsed : null) || {};
-                              const skins = (parsed.toolSkins && typeof parsed.toolSkins === 'object') ? parsed.toolSkins : {};
-
-                              setLocalExpSettings((prev) => ({
-                                ...prev,
-                                enabled: true,
-                                toolLayouts: {
-                                  ...DEFAULT_TOOL_TRANSFORMS,
-                                  ...prev.toolLayouts,
-                                  ...layouts,
-                                },
-                                toolSkins: {
-                                  ...prev.toolSkins,
-                                  ...skins,
-                                },
-                              }));
-                            }
-                          } catch (err) {
-                            console.error('Failed to parse pack JSON:', err);
-                          }
+                        const data = {
+                          appName: 'TutorBoard',
+                          format: 'tutorboard-3d-toolpack',
+                          version: '1.0',
+                          exportedAt: new Date().toISOString(),
+                          enabled: true,
+                          toolLayouts: localExpSettings.toolLayouts || DEFAULT_TOOL_TRANSFORMS,
+                          toolSkins: localExpSettings.toolSkins || {},
                         };
-                        reader.readAsText(file);
-                        e.target.value = '';
+                        const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                        const url = URL.createObjectURL(blob);
+                        const a = document.createElement('a');
+                        a.href = url;
+                        a.download = `tutorboard-3d-toolpack-${new Date().toISOString().slice(0, 10)}.json`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
                       }}
-                    />
-                  </label>
+                      className="px-3 py-1.5 bg-white hover:bg-slate-50 text-purple-900 font-bold rounded-xl text-xs border border-purple-300 shadow-xs transition flex items-center gap-1.5 cursor-pointer hover:border-purple-400"
+                    >
+                      <Download className="w-3.5 h-3.5 text-purple-600" />
+                      <span>Скачать полный пак</span>
+                    </button>
+
+                    {/* Import Full Pack JSON */}
+                    <label className="px-3 py-1.5 bg-purple-600 hover:bg-purple-700 text-white font-bold rounded-xl text-xs transition flex items-center gap-1.5 shadow-sm shadow-purple-600/30 cursor-pointer">
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Загрузить пак</span>
+                      <input
+                        type="file"
+                        accept=".json,application/json"
+                        className="hidden"
+                        onChange={(e) => {
+                          const file = e.target.files?.[0];
+                          if (!file) return;
+                          const reader = new FileReader();
+                          reader.onload = (event) => {
+                            try {
+                              const parsed = JSON.parse(event.target?.result as string);
+                              if (parsed && typeof parsed === 'object') {
+                                const layouts = parsed.toolLayouts || (parsed.pen?.scale !== undefined ? parsed : null) || {};
+                                const skins = (parsed.toolSkins && typeof parsed.toolSkins === 'object') ? parsed.toolSkins : {};
+
+                                setLocalExpSettings((prev) => ({
+                                  ...prev,
+                                  enabled: true,
+                                  toolLayouts: {
+                                    ...DEFAULT_TOOL_TRANSFORMS,
+                                    ...prev.toolLayouts,
+                                    ...layouts,
+                                  },
+                                  toolSkins: {
+                                    ...prev.toolSkins,
+                                    ...skins,
+                                  },
+                                }));
+                              }
+                            } catch (err) {
+                              console.error('Failed to parse pack JSON:', err);
+                            }
+                          };
+                          reader.readAsText(file);
+                          e.target.value = '';
+                        }}
+                      />
+                    </label>
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
 
             {/* Tool Skins Config List */}
@@ -474,7 +529,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                   Изображения инструментов (PNG)
                 </span>
                 <span className="text-[11px] text-slate-500">
-                  По умолчанию: фиолетово-чёрная сетка
+                  {isTutor ? 'Загрузите прозрачные PNG без фона' : 'Синхронизировано от преподавателя'}
                 </span>
               </div>
 
@@ -533,48 +588,55 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                   : 'bg-purple-100 text-purple-800'
                               }`}
                             >
-                              {customSkin ? '✓ Кастомный PNG' : 'Фиолетово-чёрная сетка'}
+                              {customSkin ? '✓ Пользовательский PNG' : 'Фиолетово-чёрная сетка'}
                             </span>
                           </div>
                         </div>
                       </div>
 
-                      {/* Right: Upload & Clear Actions */}
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => fileInputRefs.current[slot.key]?.click()}
-                          title="Загрузить свой PNG файл"
-                          className="px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold rounded-xl text-xs transition flex items-center gap-1.5 border border-purple-200 cursor-pointer"
-                        >
-                          <Upload className="w-3.5 h-3.5" />
-                          <span>{customSkin ? 'Заменить' : 'Загрузить PNG'}</span>
-                        </button>
-                        <input
-                          ref={(el) => {
-                            fileInputRefs.current[slot.key] = el;
-                          }}
-                          type="file"
-                          accept="image/png,image/webp,image/svg+xml,image/jpeg"
-                          className="hidden"
-                          onChange={(e) => {
-                            const f = e.target.files?.[0];
-                            if (f) handleFileUpload(slot.key, f);
-                            e.target.value = '';
-                          }}
-                        />
-
-                        {customSkin && (
+                      {/* Right: Upload & Clear Actions (Tutor only) or Locked Badge (Student) */}
+                      {isTutor ? (
+                        <div className="flex items-center gap-1.5 shrink-0">
                           <button
                             type="button"
-                            onClick={() => handleRemoveCustomSkin(slot.key)}
-                            title="Сбросить на стандартную сетку"
-                            className="p-1.5 bg-slate-100 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-xl transition border border-slate-200 hover:border-rose-200 cursor-pointer"
+                            onClick={() => fileInputRefs.current[slot.key]?.click()}
+                            title="Загрузить свой PNG файл"
+                            className="px-2.5 py-1.5 bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold rounded-xl text-xs transition flex items-center gap-1.5 border border-purple-200 cursor-pointer"
                           >
-                            <Trash2 className="w-3.5 h-3.5" />
+                            <Upload className="w-3.5 h-3.5" />
+                            <span>{customSkin ? 'Заменить' : 'Загрузить PNG'}</span>
                           </button>
-                        )}
-                      </div>
+                          <input
+                            ref={(el) => {
+                              fileInputRefs.current[slot.key] = el;
+                            }}
+                            type="file"
+                            accept="image/png,image/webp,image/svg+xml,image/jpeg"
+                            className="hidden"
+                            onChange={(e) => {
+                              const f = e.target.files?.[0];
+                              if (f) handleFileUpload(slot.key, f);
+                              e.target.value = '';
+                            }}
+                          />
+
+                          {customSkin && (
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCustomSkin(slot.key)}
+                              title="Сбросить на стандартную сетку"
+                              className="p-1.5 bg-slate-100 hover:bg-rose-50 text-slate-500 hover:text-rose-600 rounded-xl transition border border-slate-200 hover:border-rose-200 cursor-pointer"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 text-[11px] font-semibold text-slate-400 px-2 py-1 bg-slate-50 rounded-xl border border-slate-200/60">
+                          <Lock className="w-3 h-3 text-slate-400" />
+                          <span>Преподаватель</span>
+                        </div>
+                      )}
                     </div>
                   );
                 })}
